@@ -1,0 +1,8 @@
+[package]
+name = "diversion-abi"
+version = "0.1.0"
+edition = "2024"
+authors = ["Dasaav"]
+license = "MIT OR Apache-2.0"
+
+[dependencies]
