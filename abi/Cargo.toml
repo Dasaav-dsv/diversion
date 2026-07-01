@@ -6,3 +6,15 @@ authors = ["Dasaav"]
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+atomic-wait = "=1.1.0"
+fxhash = "0.2.1"
+hashbrown = { version = "0.17.1", default-features = false, features = [
+    "inline-more",
+] }
+memmap2 = "0.9.11"
+
+[target.'cfg(unix)'.dependencies]
+libc = "^0.2" # same as atomic-wait
+
+[features]
+__private-abi = []

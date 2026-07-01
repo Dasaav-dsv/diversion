@@ -1,14 +1,23 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+#![cfg(feature = "__private-abi")]
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod context;
+mod mmap;
+mod mutex;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+/// A memory address without provenance (`usize` alias).
+pub type Address = usize;
+
+/// A static, type erased reference to a function.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ErasedFn(&'static ());
+
+pub const VERSION: u32 = {
+    let version_str = env!("CARGO_PKG_VERSION_MAJOR").as_bytes();
+    let mut version = 0;
+    let mut i = 0;
+    while i < version_str.len() {
+        version = version * 10 + (version_str[i] - b'0') as u32;
+        i += 1;
     }
-}
+    version
+};
