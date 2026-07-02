@@ -7,10 +7,6 @@ mod mutex;
 /// A memory address without provenance (`usize` alias).
 pub type Address = usize;
 
-/// A static, type erased reference to a function.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ErasedFn(&'static ());
-
 pub const VERSION: u32 = {
     let version_str = env!("CARGO_PKG_VERSION_MAJOR").as_bytes();
     let mut version = 0;

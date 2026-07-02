@@ -9,12 +9,14 @@ use std::{
 /// A mutex that is a POD (plain old data) struct.
 ///
 /// It can be zero-initialized in an unlocked state.
+#[derive(Debug)]
 #[repr(C)]
 pub struct PodMutex {
     inner: AtomicU32,
 }
 
 /// [`PodMutex::lock`] RAII lock guard which unlocks the mutex on drop.
+#[derive(Debug)]
 #[repr(transparent)]
 pub struct PodMutexGuard<'a>(&'a AtomicU32);
 

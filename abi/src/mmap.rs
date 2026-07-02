@@ -43,6 +43,6 @@ mod tests {
 
         const KB: u32 = 1024;
 
-        let _mmap = unsafe { mmap::open(&name, 1 * KB, 128 * KB) };
+        let _mmap = unsafe { mmap::open(&name, 1 * KB, 128 * KB).unwrap() };
     }
 }

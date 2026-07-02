@@ -1,83 +1,76 @@
 use std::{
-    fmt, io,
-    mem::ManuallyDrop,
+    io,
+    mem::{ManuallyDrop, MaybeUninit},
+    ops::{Deref, DerefMut},
     process, ptr,
-    sync::{
-        Mutex, MutexGuard,
-        atomic::{AtomicPtr, Ordering},
-    },
+    sync::atomic::{AtomicPtr, Ordering},
 };
 
-use fxhash::FxBuildHasher;
-use hashbrown::HashMap;
-
 use crate::{
-    Address, ErasedFn, VERSION, mmap,
+    Address, VERSION, mmap,
     mutex::{PodMutex, PodMutexGuard},
 };
 
-type FxHashMap<K, V> = HashMap<K, V, FxBuildHasher>;
+/// Process-wide `diversion` context.
+///
+/// DO NOT TOUCH: this is a part of the internal, perma-unstable API.
+#[derive(Debug)]
+pub struct ProcessContext {
+    inner: ProcessContextInner,
+    alloc: [MaybeUninit<u8>],
+}
 
-pub struct Context {
-    library: MutexGuard<'static, LibraryContext>,
+/// Process-wide `diversion` context mutex guard.
+///
+/// DO NOT TOUCH: this is a part of the internal, perma-unstable API.
+#[derive(Debug)]
+pub struct ProcessContextGuard {
     process: &'static mut ProcessContext,
     _process_guard: PodMutexGuard<'static>,
 }
 
-pub struct LibraryContext {
-    trampolines: FxHashMap<Address, ErasedFn>,
+/// A static, type erased atomic pointer to a function.
+#[derive(Debug)]
+#[repr(transparent)]
+pub struct AtomicErasedFn(AtomicPtr<()>);
+
+/// Empty slot corresponding to an address passed to [`ProcessContext::get_thunk`].
+#[derive(Debug)]
+pub struct ThunkSlot {
+    index: usize,
+    addr: Address,
 }
 
+/// N.B. this struct is a POD type.
+#[derive(Debug)]
 #[repr(C)]
-pub struct ProcessContext {
-    allocator_start: u32,
-    allocator_end: u32,
-}
-
-#[repr(C)]
-struct ProcessContextOuter {
+struct ProcessContextInner {
     mutex: PodMutex,
     size: u32,
+    alloc_len: usize,
+    alloc_cap: usize,
 }
 
-static PROCESS_CONTEXT: AtomicPtr<ProcessContextOuter> = AtomicPtr::new(ptr::null_mut());
-
-static LIBRARY_CONTEXT: Mutex<LibraryContext> = Mutex::new(LibraryContext::new());
-
-impl LibraryContext {
-    const fn new() -> Self {
-        Self {
-            trampolines: FxHashMap::with_hasher(FxBuildHasher::new()),
-        }
-    }
-
-    /// Acquire a lock on the library context.
-    ///
-    /// # Safety
-    ///
-    /// DO NOT TOUCH: this is an internal, perma-unstable function.
-    pub fn acquire() -> MutexGuard<'static, Self> {
-        match LIBRARY_CONTEXT.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                LIBRARY_CONTEXT.clear_poison();
-                poisoned.into_inner()
-            }
-        }
-    }
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct ThunkFn {
+    addr: Address,
+    thunk: &'static AtomicErasedFn,
 }
 
-impl Context {
+static PROCESS_CONTEXT: AtomicPtr<ProcessContextInner> = AtomicPtr::new(ptr::null_mut());
+
+impl ProcessContext {
     /// Acquire a lock on the global context.
     ///
     /// # Safety
     ///
-    /// DO NOT TOUCH: this is an internal, perma-unstable function.
-    pub fn acquire(library: MutexGuard<'static, LibraryContext>) -> io::Result<Self> {
-        let mut process_outer_ptr = PROCESS_CONTEXT.load(Ordering::Acquire);
+    /// DO NOT TOUCH: this is a part of the internal, perma-unstable API.
+    pub fn acquire() -> io::Result<ProcessContextGuard> {
+        let mut inner_ptr = PROCESS_CONTEXT.load(Ordering::Acquire);
 
         // Check if we need to initialize the static pointer.
-        if process_outer_ptr.is_null() {
+        if inner_ptr.is_null() {
             const MB: u32 = 1024 * 1024;
 
             let mut size = 16 * MB;
@@ -87,12 +80,11 @@ impl Context {
             // Check if the process global shared memory needs to be initialized.
             // Keep the drop order in mind: first `outer`, then `_guard`, and lastly `mmap`.
             {
-                let min_size = size_of::<ProcessContextOuter>() + size_of::<ProcessContext>();
-
                 // SAFETY: as long as no one other than `diversion` code opens this map.
                 // Below assume the returned memory map is at least `min_size` long.
-                let mmap = unsafe { mmap::open(&name, min_size as u32, size)? };
-                let outer_ptr = mmap.as_mut_ptr().cast::<ProcessContextOuter>();
+                let mmap =
+                    unsafe { mmap::open(&name, size_of::<ProcessContextInner>() as u32, size)? };
+                let outer_ptr = mmap.as_mut_ptr().cast::<ProcessContextInner>();
 
                 // SAFETY: the zeroed (newly created mmap) bit pattern is valid for this mutex.
                 let _guard = unsafe { (*(&raw const (*outer_ptr).mutex)).lock() };
@@ -103,11 +95,9 @@ impl Context {
                 if outer.size == 0 {
                     // Process global shared memory has *not* been initialized.
                     outer.size = size;
-
-                    // SAFETY: write within `min_size` bytes.
-                    unsafe {
-                        ProcessContext::write(outer_ptr, size);
-                    }
+                    outer.alloc_len = 0;
+                    outer.alloc_cap =
+                        (size as usize).saturating_sub(size_of::<ProcessContextInner>());
                 }
 
                 // Get the actual size since it may have been initialized by another thread.
@@ -116,12 +106,12 @@ impl Context {
 
             // SAFETY: assume size is valid (and no one else opens this map).
             let mmap = unsafe { ManuallyDrop::new(mmap::open(&name, size, size)?) };
-            process_outer_ptr = mmap.as_mut_ptr().cast::<ProcessContextOuter>();
+            inner_ptr = mmap.as_mut_ptr().cast::<ProcessContextInner>();
 
             if PROCESS_CONTEXT
                 .compare_exchange(
                     ptr::null_mut(),
-                    process_outer_ptr,
+                    inner_ptr,
                     Ordering::AcqRel,
                     Ordering::Relaxed,
                 )
@@ -133,43 +123,87 @@ impl Context {
         }
 
         // SAFETY: the map has been initialized and these references are valid.
-        let _process_guard = unsafe { (*(&raw const (*process_outer_ptr).mutex)).lock() };
+        let _process_guard = unsafe { (*(&raw const (*inner_ptr).mutex)).lock() };
 
         // SAFETY: just locked the mutex, memory access is exclusive.
-        let process = unsafe { &mut *process_outer_ptr.add(1).cast::<ProcessContext>() };
+        // `alloc_cap` is the actual trailing byte length in the map.
+        let process = unsafe {
+            let trailing_len = (*inner_ptr).alloc_cap;
+            let slice = ptr::slice_from_raw_parts_mut(inner_ptr.cast::<()>(), trailing_len);
+            &mut *(slice as *mut ProcessContext)
+        };
 
-        Ok(Self {
-            library,
+        Ok(ProcessContextGuard {
             process,
             _process_guard,
         })
     }
-}
 
-impl ProcessContext {
-    unsafe fn write(start: *mut ProcessContextOuter, size: u32) {
-        let allocator_start = 0;
-        let allocator_end = size.saturating_sub(
-            (size_of::<ProcessContextOuter>() + size_of::<ProcessContext>()) as u32,
-        );
+    /// Get an atomic pointer to the thunk pointer if the function at this address
+    /// has been hooked, or the slot to insert a new thunk at.
+    pub fn get_thunk(&self, addr: Address) -> Result<&'static AtomicErasedFn, ThunkSlot> {
+        let inner = &self.inner;
 
-        unsafe {
-            let ptr = start.add(1).cast::<ProcessContext>();
+        // SAFETY: bytes up to `alloc_len` must be valid `ThunkFn` instances.
+        let (_, thunks, _) = unsafe { self.alloc[..inner.alloc_len].align_to::<ThunkFn>() };
 
-            ptr.write(Self {
-                allocator_start,
-                allocator_end,
-            });
+        let i = thunks
+            .binary_search_by_key(&addr, |thunk| thunk.addr)
+            .map_err(|index| ThunkSlot { index, addr })?;
 
-            let _addr = ptr.expose_provenance();
+        Ok(thunks[i].thunk)
+    }
+
+    /// Insert a new atomic pointer at a thunk slot returned by [`Self::get_thunk`].
+    pub fn insert_thunk(
+        &mut self,
+        slot: ThunkSlot,
+        thunk: &'static AtomicErasedFn,
+    ) -> Result<(), ThunkSlot> {
+        let inner = &mut self.inner;
+        let len = inner.alloc_len / size_of::<ThunkFn>();
+
+        if slot.index > len || inner.alloc_len + size_of::<ThunkFn>() > inner.alloc_cap {
+            return Err(slot);
         }
+
+        inner.alloc_len += size_of::<ThunkFn>();
+
+        // SAFETY: reinterpreting `MaybeUninit<u8>` as (aligned) `MaybeUninit<ThunkFn>`.
+        let (_, slice, _) = unsafe { self.alloc.align_to_mut::<MaybeUninit<ThunkFn>>() };
+
+        slice.copy_within(slot.index..len - slot.index, slot.index + 1);
+        slice[slot.index] = MaybeUninit::new(ThunkFn {
+            addr: slot.addr,
+            thunk,
+        });
+
+        Ok(())
     }
 }
 
-impl fmt::Debug for ErasedFn {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("ErasedFn")
-            .field(&&raw const *self.0)
-            .finish()
+impl Deref for ProcessContextGuard {
+    type Target = ProcessContext;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.process
+    }
+}
+
+impl DerefMut for ProcessContextGuard {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.process
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::context::ProcessContext;
+
+    #[test]
+    fn acquire_context() {
+        let _context = ProcessContext::acquire().unwrap();
     }
 }
