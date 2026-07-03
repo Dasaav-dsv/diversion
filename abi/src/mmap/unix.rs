@@ -84,7 +84,7 @@ impl MmapRaw {
             Err(e) => return Err(e),
         };
 
-        let size = open_size.min(create_size);
+        let size = open_size.min(create_size).max(1);
 
         let ptr = unsafe {
             mmap(
