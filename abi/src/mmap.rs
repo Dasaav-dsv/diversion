@@ -1,48 +1,73 @@
-use std::{io, num::NonZero};
+use std::{ffi::c_void, io, num::NonZero, process};
 
-use memmap2::{MmapOptions, MmapRaw};
+use crate::VERSION;
 
-#[cfg(unix)]
-mod unix;
-#[cfg(windows)]
-mod windows;
+cfg_select! {
+    unix => {
+        mod unix;
+        use unix::*;
+    }
+    windows => {
+        mod windows;
+        use windows::*;
+    }
+}
 
-pub unsafe fn open(name: &str, open_size: u32, create_size: u32) -> io::Result<MmapRaw> {
-    let open_size = open_size.min(create_size);
-    let create_size = NonZero::new(create_size).unwrap_or(NonZero::<u32>::MIN);
+#[derive(Clone, Debug)]
+pub struct MmapBuilder {
+    name: MmapName,
+    size: NonZero<u32>,
+}
 
-    let raw_desc = unsafe {
-        cfg_select! {
-            unix => unix::open(name, create_size)?,
-            windows => windows::open(name, create_size)?,
+#[derive(Debug)]
+pub struct MmapRaw {
+    ptr: *mut c_void,
+    size: u32,
+}
+
+impl MmapBuilder {
+    pub fn new(size: u32) -> io::Result<Self> {
+        let size = NonZero::new(size).unwrap_or(NonZero::<u32>::MIN);
+
+        let start_time = start_time()?;
+        let pid = process::id();
+
+        let name_str = format!("diversion-{VERSION}-{pid}-{start_time}");
+        let name = MmapName::new(&name_str);
+
+        Ok(Self { name, size })
+    }
+
+    pub unsafe fn open(&self, size: u32) -> io::Result<MmapRaw> {
+        unsafe {
+            cfg_select! {
+                unix => MmapRaw::open(&self.name, self.size, size),
+                windows => MmapRaw::open(&self.name, self.size, size),
+            }
         }
-    };
+    }
+}
 
-    MmapOptions::new().len(open_size as usize).map_raw(raw_desc)
+impl MmapRaw {
+    pub fn as_mut_ptr(&mut self) -> *mut c_void {
+        self.ptr
+    }
+
+    #[allow(unused)]
+    pub fn size(&self) -> u32 {
+        self.size
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        hash::{BuildHasher, Hash, Hasher, RandomState},
-        process, thread,
-        time::Instant,
-    };
-
-    use crate::mmap;
+    use crate::mmap::MmapBuilder;
 
     #[test]
     fn open_mmap() {
-        let mut hasher = RandomState::new().build_hasher();
-
-        Instant::now().hash(&mut hasher);
-        process::id().hash(&mut hasher);
-        thread::current().id().hash(&mut hasher);
-
-        let name = format!("diversion-test-{:x}", hasher.finish());
-
         const KB: u32 = 1024;
 
-        let _mmap = unsafe { mmap::open(&name, 1 * KB, 128 * KB).unwrap() };
+        let builder = MmapBuilder::new(128 * KB).unwrap();
+        let _mmap = unsafe { builder.open(1 * KB).unwrap() };
     }
 }

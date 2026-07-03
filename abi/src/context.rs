@@ -2,12 +2,13 @@ use std::{
     io,
     mem::{ManuallyDrop, MaybeUninit},
     ops::{Deref, DerefMut},
-    process, ptr,
+    ptr,
     sync::atomic::{AtomicPtr, Ordering},
 };
 
 use crate::{
-    Address, VERSION, mmap,
+    Address,
+    mmap::MmapBuilder,
     mutex::{PodMutex, PodMutexGuard},
 };
 
@@ -74,19 +75,19 @@ impl ProcessContext {
             const MB: u32 = 1024 * 1024;
 
             let mut size = 16 * MB;
-            let pid = process::id();
-            let name = format!("diversion-{VERSION}-{pid}");
+            let mmap_builder = MmapBuilder::new(size)?;
 
             // Check if the process global shared memory needs to be initialized.
             // Keep the drop order in mind: first `outer`, then `_guard`, and lastly `mmap`.
             {
                 // SAFETY: as long as no one other than `diversion` code opens this map.
                 // Below assume the returned memory map is at least `min_size` long.
-                let mmap =
-                    unsafe { mmap::open(&name, size_of::<ProcessContextInner>() as u32, size)? };
+                let mut mmap =
+                    unsafe { mmap_builder.open(size_of::<ProcessContextInner>() as u32)? };
                 let outer_ptr = mmap.as_mut_ptr().cast::<ProcessContextInner>();
 
                 // SAFETY: the zeroed (newly created mmap) bit pattern is valid for this mutex.
+                #[allow(clippy::deref_addrof)]
                 let _guard = unsafe { (*(&raw const (*outer_ptr).mutex)).lock() };
 
                 // SAFETY: just locked the mutex, memory access is exclusive.
@@ -105,7 +106,7 @@ impl ProcessContext {
             }
 
             // SAFETY: assume size is valid (and no one else opens this map).
-            let mmap = unsafe { ManuallyDrop::new(mmap::open(&name, size, size)?) };
+            let mut mmap = unsafe { ManuallyDrop::new(mmap_builder.open(size)?) };
             inner_ptr = mmap.as_mut_ptr().cast::<ProcessContextInner>();
 
             if PROCESS_CONTEXT
@@ -123,6 +124,7 @@ impl ProcessContext {
         }
 
         // SAFETY: the map has been initialized and these references are valid.
+        #[allow(clippy::deref_addrof)]
         let _process_guard = unsafe { (*(&raw const (*inner_ptr).mutex)).lock() };
 
         // SAFETY: just locked the mutex, memory access is exclusive.
@@ -187,14 +189,14 @@ impl Deref for ProcessContextGuard {
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        &self.process
+        self.process
     }
 }
 
 impl DerefMut for ProcessContextGuard {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.process
+        self.process
     }
 }
 
