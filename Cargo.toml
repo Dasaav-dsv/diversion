@@ -8,3 +8,8 @@ license = "MIT OR Apache-2.0"
 [workspace]
 members = ["abi"]
 resolver = "3"
+
+[dependencies]
+diversion-abi = { path = "abi", version = "0.1.0", features = [
+    "__private-abi",
+] }

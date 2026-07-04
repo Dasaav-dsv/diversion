@@ -21,6 +21,9 @@ checksum = "bf600ae93fe40193cd88479a48b362e9ba042776c832c29780248067d2700848"
 [[package]]
 name = "diversion"
 version = "0.1.0"
+dependencies = [
+ "diversion-abi",
+]
 
 [[package]]
 name = "diversion-abi"
