@@ -6,6 +6,8 @@ use std::{
     sync::atomic::{AtomicPtr, Ordering},
 };
 
+use bump_into::BumpInto;
+
 use crate::{
     Address,
     mmap::MmapBuilder,
@@ -143,6 +145,7 @@ impl ProcessContext {
 
     /// Get an atomic pointer to the thunk pointer if the function at this address
     /// has been hooked, or the slot to insert a new thunk at.
+    #[inline]
     pub fn get_thunk(&self, addr: Address) -> Result<&'static AtomicErasedFn, ThunkSlot> {
         let inner = &self.inner;
 
@@ -157,6 +160,8 @@ impl ProcessContext {
     }
 
     /// Insert a new atomic pointer at a thunk slot returned by [`Self::get_thunk`].
+    #[inline]
+    #[track_caller]
     pub fn insert_thunk(
         &mut self,
         slot: ThunkSlot,
@@ -181,6 +186,13 @@ impl ProcessContext {
         });
 
         Ok(())
+    }
+
+    /// Create a bump allocator that borrows the memory allocated by the context.
+    #[inline]
+    pub fn bump_into(&mut self) -> BumpInto<'_> {
+        let free = &mut self.alloc[self.inner.alloc_len..];
+        BumpInto::from_slice(free)
     }
 }
 

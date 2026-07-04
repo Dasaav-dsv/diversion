@@ -13,6 +13,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "bump-into"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf600ae93fe40193cd88479a48b362e9ba042776c832c29780248067d2700848"
+
+[[package]]
 name = "diversion"
 version = "0.1.0"
 
@@ -21,6 +27,7 @@ name = "diversion-abi"
 version = "0.1.0"
 dependencies = [
  "atomic-wait",
+ "bump-into",
  "libc",
 ]
 
