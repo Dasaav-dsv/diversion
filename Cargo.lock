@@ -101,6 +101,7 @@ dependencies = [
  "closure-ffi",
  "closure-ffi-iced-x86",
  "diversion-abi",
+ "parking_lot",
  "thiserror",
 ]
 

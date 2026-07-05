@@ -10,14 +10,17 @@ pub mod installer;
 pub type Result<T> = std::result::Result<T, error::Error>;
 
 #[inline]
-pub unsafe fn install<T: FnPtr>(target: T) -> Result<Installer<T>> {
+pub unsafe fn install<T>(target: T) -> Result<Installer<T>>
+where
+    T: FnPtr + 'static,
+{
     unsafe { Installer::new(target) }
 }
 
 #[inline]
 pub unsafe fn hook<T, H>(target: T, hook: impl FnOnce(T) -> H) -> Result<HookHandle>
 where
-    T: FnPtr,
+    T: FnPtr + 'static,
     (T::CC, H): FnThunk<T>,
     H: Send + Sync + 'static,
 {
@@ -27,7 +30,7 @@ where
 #[inline]
 pub unsafe fn hook_mut<T, H>(target: T, hook: impl FnOnce(T) -> H) -> Result<HookHandle>
 where
-    T: FnPtr,
+    T: FnPtr + 'static,
     (T::CC, H): FnMutThunk<T>,
     H: Send + 'static,
 {
@@ -37,7 +40,7 @@ where
 #[inline]
 pub unsafe fn hook_once<T, H>(target: T, hook: impl FnOnce(T) -> H) -> Result<HookHandle>
 where
-    T: FnPtr,
+    T: FnPtr + 'static,
     (T::CC, H): FnOnceThunk<T>,
     H: Send + 'static,
 {
@@ -47,7 +50,7 @@ where
 #[inline]
 pub unsafe fn hook_permanent<T, H>(target: T, hook: impl FnOnce(T) -> H) -> Result<()>
 where
-    T: FnPtr,
+    T: FnPtr + 'static,
     (T::CC, H): FnThunk<T>,
     H: Send + Sync + 'static,
 {
@@ -57,8 +60,8 @@ where
 #[inline]
 pub unsafe fn hook_permanent_mut<T, H>(target: T, hook: impl FnOnce(T) -> H) -> Result<()>
 where
-    T: FnPtr,
-    (T::CC, H): FnMutThunk<T>,
+    T: FnPtr + 'static,
+    for<'a> (T::CC, &'a mut H): FnMutThunk<T>,
     H: Send + 'static,
 {
     unsafe { Installer::new(target)?.hook_permanent_mut(hook) }
@@ -68,10 +71,10 @@ where
 pub unsafe fn hook_scoped<T, H, R>(
     target: T,
     hook: impl FnOnce(T) -> H,
-    scope: impl FnOnce(&HookHandle) -> R,
+    scope: impl FnOnce() -> R,
 ) -> Result<R>
 where
-    T: FnPtr,
+    T: FnPtr + 'static,
     (T::CC, H): FnThunk<T>,
     H: Send + Sync,
 {
@@ -82,10 +85,10 @@ where
 pub unsafe fn hook_scoped_mut<T, H, R>(
     target: T,
     hook: impl FnOnce(T) -> H,
-    scope: impl FnOnce(&HookHandle) -> R,
+    scope: impl FnOnce() -> R,
 ) -> Result<R>
 where
-    T: FnPtr,
+    T: FnPtr + 'static,
     (T::CC, H): FnMutThunk<T>,
     H: Send,
 {
@@ -96,12 +99,22 @@ where
 pub unsafe fn hook_scoped_once<T, H, R>(
     target: T,
     hook: impl FnOnce(T) -> H,
-    scope: impl FnOnce(&HookHandle) -> R,
+    scope: impl FnOnce() -> R,
 ) -> Result<R>
 where
-    T: FnPtr,
+    T: FnPtr + 'static,
     (T::CC, H): FnOnceThunk<T>,
     H: Send,
 {
     unsafe { Installer::new(target)?.hook_scoped_once(hook, scope) }
+}
+
+cfg_select! {
+    feature = "parking_lot" => {
+        use parking_lot::Mutex;
+    },
+    _ => {
+        mod mutex;
+        use mutex::Mutex;
+    }
 }
