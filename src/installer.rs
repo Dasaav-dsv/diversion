@@ -8,7 +8,10 @@ use closure_ffi::{
     traits::{FnMutThunk, FnOnceThunk, FnPtr, FnThunk},
 };
 
-use crate::{Mutex, Result, hook::HookHandle};
+use crate::{
+    Mutex, Result,
+    hook::{HookHandle, HookScope},
+};
 
 #[derive(Debug)]
 pub struct Installer<T> {
@@ -78,7 +81,7 @@ where
     pub unsafe fn hook_scoped<H, R>(
         self,
         hook: impl FnOnce(T) -> H,
-        scope: impl FnOnce() -> R,
+        scope: impl FnOnce(HookScope<'_>) -> R,
     ) -> Result<R>
     where
         (T::CC, H): FnThunk<T>,
@@ -86,16 +89,16 @@ where
     {
         // SAFETY: the lifetime of the handle cannot be extended past the lifetime of `H`,
         // the rest of the contract is upheld by the caller.
-        let _handle =
+        let handle =
             unsafe { self.hook_unchecked_lt(move |original| (T::CC::default(), hook(original)))? };
 
-        Ok(scope())
+        Ok(scope(HookScope::new(&handle)))
     }
 
     pub unsafe fn hook_scoped_mut<H, R>(
         self,
         hook: impl FnOnce(T) -> H,
-        scope: impl FnOnce() -> R,
+        scope: impl FnOnce(HookScope<'_>) -> R,
     ) -> Result<R>
     where
         (T::CC, H): FnMutThunk<T>,
@@ -103,17 +106,17 @@ where
     {
         // SAFETY: the lifetime of the handle cannot be extended past the lifetime of `H`,
         // the rest of the contract is upheld by the caller.
-        let _handle = unsafe {
+        let handle = unsafe {
             self.hook_unchecked_lt_mut(move |original| (T::CC::default(), hook(original)))?
         };
 
-        Ok(scope())
+        Ok(scope(HookScope::new(&handle)))
     }
 
     pub unsafe fn hook_scoped_once<H, R>(
         self,
         hook: impl FnOnce(T) -> H,
-        scope: impl FnOnce() -> R,
+        scope: impl FnOnce(HookScope<'_>) -> R,
     ) -> Result<R>
     where
         (T::CC, H): FnOnceThunk<T>,
@@ -121,11 +124,11 @@ where
     {
         // SAFETY: the lifetime of the handle cannot be extended past the lifetime of `H`,
         // the rest of the contract is upheld by the caller.
-        let _handle = unsafe {
+        let handle = unsafe {
             self.hook_unchecked_lt_once(move |original| (T::CC::default(), hook(original)))?
         };
 
-        Ok(scope())
+        Ok(scope(HookScope::new(&handle)))
     }
 
     /// # SAFETY:

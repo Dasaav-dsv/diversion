@@ -1,6 +1,9 @@
 use closure_ffi::traits::{FnMutThunk, FnOnceThunk, FnPtr, FnThunk};
 
-use crate::{hook::HookHandle, installer::Installer};
+use crate::{
+    hook::{HookHandle, HookScope},
+    installer::Installer,
+};
 
 pub mod error;
 pub mod hook;
@@ -71,7 +74,7 @@ where
 pub unsafe fn hook_scoped<T, H, R>(
     target: T,
     hook: impl FnOnce(T) -> H,
-    scope: impl FnOnce() -> R,
+    scope: impl FnOnce(HookScope<'_>) -> R,
 ) -> Result<R>
 where
     T: FnPtr + 'static,
@@ -85,7 +88,7 @@ where
 pub unsafe fn hook_scoped_mut<T, H, R>(
     target: T,
     hook: impl FnOnce(T) -> H,
-    scope: impl FnOnce() -> R,
+    scope: impl FnOnce(HookScope<'_>) -> R,
 ) -> Result<R>
 where
     T: FnPtr + 'static,
@@ -99,7 +102,7 @@ where
 pub unsafe fn hook_scoped_once<T, H, R>(
     target: T,
     hook: impl FnOnce(T) -> H,
-    scope: impl FnOnce() -> R,
+    scope: impl FnOnce(HookScope<'_>) -> R,
 ) -> Result<R>
 where
     T: FnPtr + 'static,
