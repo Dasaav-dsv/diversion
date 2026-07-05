@@ -10,6 +10,9 @@ members = ["abi"]
 resolver = "3"
 
 [dependencies]
+closure-ffi = "5.1.2"
+closure-ffi-iced-x86 = "1.21.0-commit50066fb" # same as closure-ffi
 diversion-abi = { path = "abi", version = "0.1.0", features = [
     "__private-abi",
 ] }
+thiserror = "2.0.18"
