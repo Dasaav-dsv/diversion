@@ -14,19 +14,44 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub struct Installer<T> {
+pub struct Installer<T, Ctx = ()> {
+    context: Ctx,
     _marker: PhantomData<T>,
 }
 
-impl<T> Installer<T>
+impl<T> Installer<T, ()>
 where
     T: FnPtr + 'static,
 {
+    #[inline]
     pub unsafe fn new(target: T) -> Result<Self> {
+        unsafe { Self::new_with_context(target, ()) }
+    }
+}
+
+impl<T, Old> Installer<T, Old> {
+    #[inline]
+    pub fn with_context<Ctx>(self, context: Ctx) -> Installer<T, Ctx>
+    where
+        Ctx: Send + Sync + 'static,
+    {
+        Installer {
+            context,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<T, Ctx> Installer<T, Ctx>
+where
+    T: FnPtr + 'static,
+    Ctx: Send + Sync + 'static,
+{
+    pub unsafe fn new_with_context(target: T, context: Ctx) -> Result<Self> {
         todo!()
     }
 
-    pub unsafe fn hook<H>(self, hook: impl FnOnce(T) -> H) -> Result<HookHandle>
+    pub unsafe fn hook<H>(self, hook: impl FnOnce(T) -> H) -> Result<HookHandle<Ctx>>
     where
         (T::CC, H): FnThunk<T>,
         H: Send + Sync + 'static,
@@ -35,7 +60,7 @@ where
         unsafe { self.hook_unchecked_lt(move |original| (T::CC::default(), hook(original))) }
     }
 
-    pub unsafe fn hook_mut<H>(self, hook: impl FnOnce(T) -> H) -> Result<HookHandle>
+    pub unsafe fn hook_mut<H>(self, hook: impl FnOnce(T) -> H) -> Result<HookHandle<Ctx>>
     where
         (T::CC, H): FnMutThunk<T>,
         H: Send + 'static,
@@ -44,7 +69,7 @@ where
         unsafe { self.hook_unchecked_lt_mut(move |original| (T::CC::default(), hook(original))) }
     }
 
-    pub unsafe fn hook_once<H>(self, hook: impl FnOnce(T) -> H) -> Result<HookHandle>
+    pub unsafe fn hook_once<H>(self, hook: impl FnOnce(T) -> H) -> Result<HookHandle<Ctx>>
     where
         (T::CC, H): FnOnceThunk<T>,
         H: Send + 'static,
@@ -81,7 +106,7 @@ where
     pub unsafe fn hook_scoped<H, R>(
         self,
         hook: impl FnOnce(T) -> H,
-        scope: impl FnOnce(HookScope<'_>) -> R,
+        scope: impl FnOnce(HookScope<'_, Ctx>) -> R,
     ) -> Result<R>
     where
         (T::CC, H): FnThunk<T>,
@@ -98,7 +123,7 @@ where
     pub unsafe fn hook_scoped_mut<H, R>(
         self,
         hook: impl FnOnce(T) -> H,
-        scope: impl FnOnce(HookScope<'_>) -> R,
+        scope: impl FnOnce(HookScope<'_, Ctx>) -> R,
     ) -> Result<R>
     where
         (T::CC, H): FnMutThunk<T>,
@@ -116,7 +141,7 @@ where
     pub unsafe fn hook_scoped_once<H, R>(
         self,
         hook: impl FnOnce(T) -> H,
-        scope: impl FnOnce(HookScope<'_>) -> R,
+        scope: impl FnOnce(HookScope<'_, Ctx>) -> R,
     ) -> Result<R>
     where
         (T::CC, H): FnOnceThunk<T>,
@@ -135,14 +160,14 @@ where
     ///
     /// Same as [`Self::hook_mut`], except the `H: 'static` lifetime is not enforced.
     /// `H` **must outlive** the returned [`HookHandle`].
-    unsafe fn hook_unchecked_lt_mut<H>(self, hook: impl FnOnce(T) -> H) -> Result<HookHandle>
+    unsafe fn hook_unchecked_lt_mut<H>(self, hook: impl FnOnce(T) -> H) -> Result<HookHandle<Ctx>>
     where
         H: FnMutThunk<T>,
         H: Send,
     {
         let with_lock = move |original| {
             let hook = Mutex::new(hook(original));
-            thunk_factory::make_send_sync(move |args| unsafe { (&mut *hook.lock()).call_mut(args) })
+            thunk_factory::make_send_sync(move |args| unsafe { hook.lock().call_mut(args) })
         };
 
         // SAFETY: lifetime of `H` upheld by caller.
@@ -153,7 +178,7 @@ where
     ///
     /// Same as [`Self::hook_once`], except the `H: 'static` lifetime is not enforced.
     /// `H` **must outlive** the returned [`HookHandle`].
-    unsafe fn hook_unchecked_lt_once<H>(self, hook: impl FnOnce(T) -> H) -> Result<HookHandle>
+    unsafe fn hook_unchecked_lt_once<H>(self, hook: impl FnOnce(T) -> H) -> Result<HookHandle<Ctx>>
     where
         H: FnOnceThunk<T>,
         H: Send,
@@ -181,7 +206,7 @@ where
     ///
     /// Same as [`Self::hook`], except the `H: 'static` lifetime is not enforced.
     /// `H` **must outlive** the returned [`HookHandle`].
-    unsafe fn hook_unchecked_lt<H>(self, hook: impl FnOnce(T) -> H) -> Result<HookHandle>
+    unsafe fn hook_unchecked_lt<H>(self, hook: impl FnOnce(T) -> H) -> Result<HookHandle<Ctx>>
     where
         H: FnThunk<T> + Send + Sync,
     {

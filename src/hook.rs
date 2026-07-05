@@ -1,26 +1,39 @@
-#[derive(Debug)]
-pub struct HookHandle;
+use std::{fmt, sync::Arc};
 
-/// A [`HookHandle`] wrapper which prevents the inner handle from being leaked.
-#[derive(Clone, Debug)]
-pub struct HookScope<'a>(&'a HookHandle);
-
-impl HookHandle {
-    pub fn enable(&self, state: bool) {
-        todo!()
-    }
+pub struct HookContext<Ctx = ()> {
+    inner: Ctx,
 }
 
-impl<'a> HookScope<'a> {
+pub struct HookHandle<Ctx = ()>(Arc<HookContext<Ctx>>);
+
+/// A [`HookHandle`] wrapper which prevents the inner handle from being leaked.
+pub struct HookScope<'a, Ctx = ()>(&'a HookHandle<Ctx>);
+
+impl<'a, Ctx> HookScope<'a, Ctx> {
     /// Creates a new [`HookScope`], which immutably borrows the [`HookHandle`],
     /// but does not allow it to be cloned, forgotten or leaked.
     #[inline]
-    pub fn new(handle: &'a HookHandle) -> Self {
+    pub fn new(handle: &'a HookHandle<Ctx>) -> Self {
         Self(handle)
     }
+}
 
-    #[inline]
-    pub fn enable(&self, state: bool) {
-        self.0.enable(state);
+impl<Ctx: fmt::Debug> fmt::Debug for HookContext<Ctx> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HookContext")
+            .field("inner", &self.inner)
+            .finish()
+    }
+}
+
+impl<Ctx: fmt::Debug> fmt::Debug for HookHandle<Ctx> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("HookHandle").field(&self.0).finish()
+    }
+}
+
+impl<Ctx: fmt::Debug> fmt::Debug for HookScope<'_, Ctx> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("HookScope").field(&self.0).finish()
     }
 }
