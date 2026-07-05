@@ -19,6 +19,7 @@ impl<T: FnPtr> Installer<T> {
     pub unsafe fn hook<H>(self, hook: impl FnOnce(T) -> H) -> Result<HookHandle>
     where
         (T::CC, H): FnThunk<T>,
+        H: Send + Sync +'static,
     {
         Ok(HookHandle)
     }
@@ -26,6 +27,7 @@ impl<T: FnPtr> Installer<T> {
     pub unsafe fn hook_mut<H>(self, hook: impl FnOnce(T) -> H) -> Result<HookHandle>
     where
         (T::CC, H): FnMutThunk<T>,
+        H: Send + 'static,
     {
         Ok(HookHandle)
     }
@@ -33,6 +35,7 @@ impl<T: FnPtr> Installer<T> {
     pub unsafe fn hook_once<H>(self, hook: impl FnOnce(T) -> H) -> Result<HookHandle>
     where
         (T::CC, H): FnOnceThunk<T>,
+        H: Send + 'static,
     {
         Ok(HookHandle)
     }
@@ -40,7 +43,7 @@ impl<T: FnPtr> Installer<T> {
     pub unsafe fn hook_permanent<H>(self, hook: impl FnOnce(T) -> H) -> Result<()>
     where
         (T::CC, H): FnThunk<T>,
-        H: 'static,
+        H: Send + Sync +'static,
     {
         Ok(())
     }
@@ -48,7 +51,7 @@ impl<T: FnPtr> Installer<T> {
     pub unsafe fn hook_permanent_mut<H>(self, hook: impl FnOnce(T) -> H) -> Result<()>
     where
         (T::CC, H): FnMutThunk<T>,
-        H: 'static,
+        H: Send + 'static,
     {
         Ok(())
     }
@@ -60,6 +63,7 @@ impl<T: FnPtr> Installer<T> {
     ) -> Result<R>
     where
         (T::CC, H): FnThunk<T>,
+        H: Send + Sync,
     {
         Ok(scope(&HookHandle))
     }
@@ -71,6 +75,7 @@ impl<T: FnPtr> Installer<T> {
     ) -> Result<R>
     where
         (T::CC, H): FnMutThunk<T>,
+        H: Send,
     {
         Ok(scope(&HookHandle))
     }
@@ -82,6 +87,7 @@ impl<T: FnPtr> Installer<T> {
     ) -> Result<R>
     where
         (T::CC, H): FnOnceThunk<T>,
+        H: Send,
     {
         Ok(scope(&HookHandle))
     }

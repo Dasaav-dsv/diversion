@@ -19,6 +19,7 @@ pub unsafe fn hook<T, H>(target: T, hook: impl FnOnce(T) -> H) -> Result<HookHan
 where
     T: FnPtr,
     (T::CC, H): FnThunk<T>,
+    H: Send + Sync + 'static,
 {
     unsafe { Installer::new(target)?.hook(hook) }
 }
@@ -28,6 +29,7 @@ pub unsafe fn hook_mut<T, H>(target: T, hook: impl FnOnce(T) -> H) -> Result<Hoo
 where
     T: FnPtr,
     (T::CC, H): FnMutThunk<T>,
+    H: Send + 'static,
 {
     unsafe { Installer::new(target)?.hook_mut(hook) }
 }
@@ -37,6 +39,7 @@ pub unsafe fn hook_once<T, H>(target: T, hook: impl FnOnce(T) -> H) -> Result<Ho
 where
     T: FnPtr,
     (T::CC, H): FnOnceThunk<T>,
+    H: Send + 'static,
 {
     unsafe { Installer::new(target)?.hook_once(hook) }
 }
@@ -46,7 +49,7 @@ pub unsafe fn hook_permanent<T, H>(target: T, hook: impl FnOnce(T) -> H) -> Resu
 where
     T: FnPtr,
     (T::CC, H): FnThunk<T>,
-    H: 'static,
+    H: Send + Sync + 'static,
 {
     unsafe { Installer::new(target)?.hook_permanent(hook) }
 }
@@ -56,7 +59,7 @@ pub unsafe fn hook_permanent_mut<T, H>(target: T, hook: impl FnOnce(T) -> H) -> 
 where
     T: FnPtr,
     (T::CC, H): FnMutThunk<T>,
-    H: 'static,
+    H: Send + 'static,
 {
     unsafe { Installer::new(target)?.hook_permanent_mut(hook) }
 }
@@ -70,6 +73,7 @@ pub unsafe fn hook_scoped<T, H, R>(
 where
     T: FnPtr,
     (T::CC, H): FnThunk<T>,
+    H: Send + Sync,
 {
     unsafe { Installer::new(target)?.hook_scoped(hook, scope) }
 }
@@ -83,6 +87,7 @@ pub unsafe fn hook_scoped_mut<T, H, R>(
 where
     T: FnPtr,
     (T::CC, H): FnMutThunk<T>,
+    H: Send,
 {
     unsafe { Installer::new(target)?.hook_scoped_mut(hook, scope) }
 }
@@ -96,6 +101,7 @@ pub unsafe fn hook_scoped_once<T, H, R>(
 where
     T: FnPtr,
     (T::CC, H): FnOnceThunk<T>,
+    H: Send,
 {
     unsafe { Installer::new(target)?.hook_scoped_once(hook, scope) }
 }
