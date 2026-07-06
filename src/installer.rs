@@ -1,5 +1,6 @@
 use std::{
     marker::PhantomData,
+    ops::Deref,
     sync::atomic::{AtomicBool, Ordering},
 };
 
@@ -9,7 +10,7 @@ use closure_ffi::{
 };
 
 use crate::{
-    Mutex, Result,
+    Mutex, Result, RwLock,
     hook::{Handle, Scope, Weak},
 };
 
@@ -112,62 +113,6 @@ where
     {
         todo!()
     }
-}
-
-impl<T, Ctx> Installer<T, Ctx>
-where
-    T: FnPtr + 'static,
-    Ctx: Send + Sync + 'static,
-{
-    pub unsafe fn hook_scoped<H, R>(
-        self,
-        hook: impl FnOnce(Weak<T, Ctx>) -> H,
-        scope: impl FnOnce(Scope<'_, T, Ctx>) -> R,
-    ) -> Result<R>
-    where
-        (T::CC, H): FnThunk<T>,
-        H: Send + Sync,
-    {
-        // SAFETY: the handle cannot outlive the lifetimes of `H` or `Ctx`,
-        // the rest of the contract is upheld by the caller.
-        let handle = unsafe { self.hook_unchecked_lt(move |ctx| (T::CC::default(), hook(ctx)))? };
-
-        Ok(scope(Scope::new(&handle)))
-    }
-
-    pub unsafe fn hook_scoped_mut<H, R>(
-        self,
-        hook: impl FnOnce(Weak<T, Ctx>) -> H,
-        scope: impl FnOnce(Scope<'_, T, Ctx>) -> R,
-    ) -> Result<R>
-    where
-        (T::CC, H): FnMutThunk<T>,
-        H: Send,
-    {
-        // SAFETY: the handle cannot outlive the lifetimes of `H` or `Ctx`,
-        // the rest of the contract is upheld by the caller.
-        let handle =
-            unsafe { self.hook_unchecked_lt_mut(move |ctx| (T::CC::default(), hook(ctx)))? };
-
-        Ok(scope(Scope::new(&handle)))
-    }
-
-    pub unsafe fn hook_scoped_once<H, R>(
-        self,
-        hook: impl FnOnce(Weak<T, Ctx>) -> H,
-        scope: impl FnOnce(Scope<'_, T, Ctx>) -> R,
-    ) -> Result<R>
-    where
-        (T::CC, H): FnOnceThunk<T>,
-        H: Send,
-    {
-        // SAFETY: the handle cannot outlive the lifetimes of `H` or `Ctx`,
-        // the rest of the contract is upheld by the caller.
-        let handle =
-            unsafe { self.hook_unchecked_lt_once(move |ctx| (T::CC::default(), hook(ctx)))? };
-
-        Ok(scope(Scope::new(&handle)))
-    }
 
     /// # SAFETY:
     ///
@@ -219,7 +164,8 @@ where
         // SAFETY: lifetime of `H` upheld by caller.
         unsafe {
             self.hook_unchecked_lt(move |context| {
-                let hook = Mutex::new(Some(hook(context.clone())));
+                let original = context.upgrade().unwrap().original;
+                let hook = Mutex::new(Some(hook(context)));
                 let flag = AtomicBool::new(true);
                 thunk_factory::make_send_sync(move |args| {
                     if flag.load(Ordering::Acquire)
@@ -228,10 +174,126 @@ where
                         flag.store(false, Ordering::Release);
                         hook.call_once(args)
                     } else {
-                        context.upgrade().unwrap().original.call(args)
+                        original.call(args)
                     }
                 })
             })
+        }
+    }
+}
+
+impl<T> Installer<T, ()>
+where
+    T: FnPtr + 'static,
+{
+    pub unsafe fn scope<H, R>(
+        self,
+        hook: impl FnOnce(T) -> H,
+        scope: impl FnOnce(Scope<'_, T>) -> R,
+    ) -> Result<R>
+    where
+        for<'a> (T::CC, &'a H): FnThunk<T>,
+        H: Send + Sync,
+    {
+        let lock = RwLock::new(None);
+        let scoped = DropGuard::new(&lock, |lock| _ = lock.write().take());
+
+        // SAFETY: the handle cannot outlive the lifetime of `H`,
+        // the rest of the contract is upheld by the caller.
+        let handle = unsafe {
+            let scoped = &scoped;
+            self.hook_unchecked_lt(move |context| {
+                let original = context.upgrade().unwrap().original;
+                *scoped.write() = Some(hook(original));
+                thunk_factory::make_send_sync(move |args| match &*scoped.read() {
+                    Some(scoped) => (T::CC::default(), scoped).call_once(args),
+                    None => original.call(args),
+                })
+            })?
+        };
+
+        Ok(scope(Scope::new(&handle)))
+    }
+
+    pub unsafe fn scope_mut<H, R>(
+        self,
+        hook: impl FnOnce(T) -> H,
+        scope: impl FnOnce(Scope<'_, T>) -> R,
+    ) -> Result<R>
+    where
+        for<'a> (T::CC, &'a mut H): FnMutThunk<T>,
+        H: Send,
+    {
+        let lock = Mutex::new(None);
+        let scoped = DropGuard::new(&lock, |lock| _ = lock.lock().take());
+
+        // SAFETY: the handle cannot outlive the lifetime of `H`,
+        // the rest of the contract is upheld by the caller.
+        let handle = unsafe {
+            let scoped = &scoped;
+            self.hook_unchecked_lt(move |context| {
+                let original = context.upgrade().unwrap().original;
+                *scoped.lock() = Some(hook(original));
+                thunk_factory::make_send_sync(move |args| match &mut *scoped.lock() {
+                    Some(scoped) => (T::CC::default(), scoped).call_once(args),
+                    None => original.call(args),
+                })
+            })?
+        };
+
+        Ok(scope(Scope::new(&handle)))
+    }
+
+    pub unsafe fn scope_once<H, R>(
+        self,
+        hook: impl FnOnce(T) -> H,
+        scope: impl FnOnce(Scope<'_, T>) -> R,
+    ) -> Result<R>
+    where
+        (T::CC, H): FnOnceThunk<T>,
+        H: Send,
+    {
+        let lock = Mutex::new(None);
+        let scoped = DropGuard::new(&lock, |lock| _ = lock.lock().take());
+
+        // SAFETY: the handle cannot outlive the lifetime of `H`,
+        // the rest of the contract is upheld by the caller.
+        let handle = unsafe {
+            let scoped = &scoped;
+            self.hook_unchecked_lt(move |context| {
+                let original = context.upgrade().unwrap().original;
+                *scoped.lock() = Some(hook(original));
+                thunk_factory::make_send_sync(move |args| match scoped.lock().take() {
+                    Some(scoped) => (T::CC::default(), scoped).call_once(args),
+                    None => original.call(args),
+                })
+            })?
+        };
+
+        Ok(scope(Scope::new(&handle)))
+    }
+}
+
+struct DropGuard<T, F: FnOnce(&mut T)>(T, Option<F>);
+
+impl<T, F: FnOnce(&mut T)> DropGuard<T, F> {
+    const fn new(t: T, f: F) -> Self {
+        Self(t, Some(f))
+    }
+}
+
+impl<T, F: FnOnce(&mut T)> Deref for DropGuard<T, F> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T, F: FnOnce(&mut T)> Drop for DropGuard<T, F> {
+    fn drop(&mut self) {
+        if let Some(f) = self.1.take() {
+            f(&mut self.0);
         }
     }
 }

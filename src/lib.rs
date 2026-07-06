@@ -71,37 +71,37 @@ where
 }
 
 #[inline]
-pub unsafe fn hook_scoped<T, H, R>(
+pub unsafe fn scope<T, H, R>(
     target: T,
-    hook: impl FnOnce(Weak<T>) -> H,
+    hook: impl FnOnce(T) -> H,
     scope: impl FnOnce(Scope<'_, T>) -> R,
 ) -> Result<R>
 where
     T: FnPtr + 'static,
-    (T::CC, H): FnThunk<T>,
+    for<'a> (T::CC, &'a H): FnThunk<T>,
     H: Send + Sync,
 {
-    unsafe { Installer::new(target)?.hook_scoped(hook, scope) }
+    unsafe { Installer::new(target)?.scope(hook, scope) }
 }
 
 #[inline]
-pub unsafe fn hook_scoped_mut<T, H, R>(
+pub unsafe fn scope_mut<T, H, R>(
     target: T,
-    hook: impl FnOnce(Weak<T>) -> H,
+    hook: impl FnOnce(T) -> H,
     scope: impl FnOnce(Scope<'_, T>) -> R,
 ) -> Result<R>
 where
     T: FnPtr + 'static,
-    (T::CC, H): FnMutThunk<T>,
+    for<'a> (T::CC, &'a mut H): FnMutThunk<T>,
     H: Send,
 {
-    unsafe { Installer::new(target)?.hook_scoped_mut(hook, scope) }
+    unsafe { Installer::new(target)?.scope_mut(hook, scope) }
 }
 
 #[inline]
-pub unsafe fn hook_scoped_once<T, H, R>(
+pub unsafe fn scope_one<T, H, R>(
     target: T,
-    hook: impl FnOnce(Weak<T>) -> H,
+    hook: impl FnOnce(T) -> H,
     scope: impl FnOnce(Scope<'_, T>) -> R,
 ) -> Result<R>
 where
@@ -109,15 +109,15 @@ where
     (T::CC, H): FnOnceThunk<T>,
     H: Send,
 {
-    unsafe { Installer::new(target)?.hook_scoped_once(hook, scope) }
+    unsafe { Installer::new(target)?.scope_once(hook, scope) }
 }
 
 cfg_select! {
     feature = "parking_lot" => {
-        use parking_lot::Mutex;
+        use parking_lot::{Mutex, RwLock};
     },
     _ => {
         mod mutex;
-        use mutex::Mutex;
+        use mutex::{Mutex, RwLock};
     }
 }
