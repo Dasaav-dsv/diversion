@@ -1,7 +1,7 @@
 use closure_ffi::traits::{FnMutThunk, FnOnceThunk, FnPtr, FnThunk};
 
 use crate::{
-    hook::{Handle, Scope, Weak},
+    hook::{Handle, Weak},
     installer::Installer,
 };
 
@@ -73,8 +73,8 @@ where
 #[inline]
 pub unsafe fn scope<T, H, R>(
     target: T,
-    hook: impl FnOnce(T) -> H,
-    scope: impl FnOnce(Scope<'_, T>) -> R,
+    hook: impl FnOnce(Weak<T>) -> H,
+    scope: impl FnOnce(&Handle<T>) -> R,
 ) -> Result<R>
 where
     T: FnPtr + 'static,
@@ -87,8 +87,8 @@ where
 #[inline]
 pub unsafe fn scope_mut<T, H, R>(
     target: T,
-    hook: impl FnOnce(T) -> H,
-    scope: impl FnOnce(Scope<'_, T>) -> R,
+    hook: impl FnOnce(Weak<T>) -> H,
+    scope: impl FnOnce(&Handle<T>) -> R,
 ) -> Result<R>
 where
     T: FnPtr + 'static,
@@ -101,8 +101,8 @@ where
 #[inline]
 pub unsafe fn scope_one<T, H, R>(
     target: T,
-    hook: impl FnOnce(T) -> H,
-    scope: impl FnOnce(Scope<'_, T>) -> R,
+    hook: impl FnOnce(Weak<T>) -> H,
+    scope: impl FnOnce(&Handle<T>) -> R,
 ) -> Result<R>
 where
     T: FnPtr + 'static,
