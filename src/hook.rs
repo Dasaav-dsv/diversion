@@ -1,24 +1,49 @@
-use std::{fmt, sync::Arc};
+use std::{
+    fmt,
+    ops::Deref,
+    sync::{self, Arc},
+};
 
-pub struct HookContext<Ctx = ()> {
+pub struct Context<T, Ctx = ()> {
+    pub(crate) original: T,
     inner: Ctx,
 }
 
-pub struct HookHandle<Ctx = ()>(Arc<HookContext<Ctx>>);
+pub type Handle<T, Ctx = ()> = Arc<Context<T, Ctx>>;
 
-/// A [`HookHandle`] wrapper which prevents the inner handle from being leaked.
-pub struct HookScope<'a, Ctx = ()>(&'a HookHandle<Ctx>);
+pub type Weak<T, Ctx = ()> = sync::Weak<Context<T, Ctx>>;
 
-impl<'a, Ctx> HookScope<'a, Ctx> {
-    /// Creates a new [`HookScope`], which immutably borrows the [`HookHandle`],
+/// A [`Handle`] wrapper which prevents the inner handle from being leaked.
+pub struct Scope<'a, T, Ctx = ()>(&'a Handle<T, Ctx>);
+
+impl<'a, T, Ctx> Scope<'a, T, Ctx> {
+    /// Creates a new [`Scope`], which immutably borrows the [`Handle`],
     /// but does not allow it to be cloned, forgotten or leaked.
     #[inline]
-    pub fn new(handle: &'a HookHandle<Ctx>) -> Self {
+    pub fn new(handle: &'a Handle<T, Ctx>) -> Self {
         Self(handle)
     }
 }
 
-impl<Ctx: fmt::Debug> fmt::Debug for HookContext<Ctx> {
+impl<T, Ctx> Deref for Context<T, Ctx> {
+    type Target = Ctx;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<T, Ctx> Deref for Scope<'_, T, Ctx> {
+    type Target = Context<T, Ctx>;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        self.0
+    }
+}
+
+impl<Ctx: fmt::Debug> fmt::Debug for Context<Ctx> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HookContext")
             .field("inner", &self.inner)
@@ -26,13 +51,7 @@ impl<Ctx: fmt::Debug> fmt::Debug for HookContext<Ctx> {
     }
 }
 
-impl<Ctx: fmt::Debug> fmt::Debug for HookHandle<Ctx> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("HookHandle").field(&self.0).finish()
-    }
-}
-
-impl<Ctx: fmt::Debug> fmt::Debug for HookScope<'_, Ctx> {
+impl<Ctx: fmt::Debug> fmt::Debug for Scope<'_, Ctx> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("HookScope").field(&self.0).finish()
     }

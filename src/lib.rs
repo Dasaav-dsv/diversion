@@ -1,7 +1,7 @@
 use closure_ffi::traits::{FnMutThunk, FnOnceThunk, FnPtr, FnThunk};
 
 use crate::{
-    hook::{HookHandle, HookScope},
+    hook::{Handle, Scope, Weak},
     installer::Installer,
 };
 
@@ -21,7 +21,7 @@ where
 }
 
 #[inline]
-pub unsafe fn hook<T, H>(target: T, hook: impl FnOnce(T) -> H) -> Result<HookHandle>
+pub unsafe fn hook<T, H>(target: T, hook: impl FnOnce(Weak<T>) -> H) -> Result<Handle<T>>
 where
     T: FnPtr + 'static,
     (T::CC, H): FnThunk<T>,
@@ -31,7 +31,7 @@ where
 }
 
 #[inline]
-pub unsafe fn hook_mut<T, H>(target: T, hook: impl FnOnce(T) -> H) -> Result<HookHandle>
+pub unsafe fn hook_mut<T, H>(target: T, hook: impl FnOnce(Weak<T>) -> H) -> Result<Handle<T>>
 where
     T: FnPtr + 'static,
     (T::CC, H): FnMutThunk<T>,
@@ -41,7 +41,7 @@ where
 }
 
 #[inline]
-pub unsafe fn hook_once<T, H>(target: T, hook: impl FnOnce(T) -> H) -> Result<HookHandle>
+pub unsafe fn hook_once<T, H>(target: T, hook: impl FnOnce(Weak<T>) -> H) -> Result<Handle<T>>
 where
     T: FnPtr + 'static,
     (T::CC, H): FnOnceThunk<T>,
@@ -51,7 +51,7 @@ where
 }
 
 #[inline]
-pub unsafe fn hook_permanent<T, H>(target: T, hook: impl FnOnce(T) -> H) -> Result<()>
+pub unsafe fn hook_permanent<T, H>(target: T, hook: impl FnOnce(Weak<T>) -> H) -> Result<()>
 where
     T: FnPtr + 'static,
     (T::CC, H): FnThunk<T>,
@@ -61,7 +61,7 @@ where
 }
 
 #[inline]
-pub unsafe fn hook_permanent_mut<T, H>(target: T, hook: impl FnOnce(T) -> H) -> Result<()>
+pub unsafe fn hook_permanent_mut<T, H>(target: T, hook: impl FnOnce(Weak<T>) -> H) -> Result<()>
 where
     T: FnPtr + 'static,
     for<'a> (T::CC, &'a mut H): FnMutThunk<T>,
@@ -73,8 +73,8 @@ where
 #[inline]
 pub unsafe fn hook_scoped<T, H, R>(
     target: T,
-    hook: impl FnOnce(T) -> H,
-    scope: impl FnOnce(HookScope<'_>) -> R,
+    hook: impl FnOnce(Weak<T>) -> H,
+    scope: impl FnOnce(Scope<'_, T>) -> R,
 ) -> Result<R>
 where
     T: FnPtr + 'static,
@@ -87,8 +87,8 @@ where
 #[inline]
 pub unsafe fn hook_scoped_mut<T, H, R>(
     target: T,
-    hook: impl FnOnce(T) -> H,
-    scope: impl FnOnce(HookScope<'_>) -> R,
+    hook: impl FnOnce(Weak<T>) -> H,
+    scope: impl FnOnce(Scope<'_, T>) -> R,
 ) -> Result<R>
 where
     T: FnPtr + 'static,
@@ -101,8 +101,8 @@ where
 #[inline]
 pub unsafe fn hook_scoped_once<T, H, R>(
     target: T,
-    hook: impl FnOnce(T) -> H,
-    scope: impl FnOnce(HookScope<'_>) -> R,
+    hook: impl FnOnce(Weak<T>) -> H,
+    scope: impl FnOnce(Scope<'_, T>) -> R,
 ) -> Result<R>
 where
     T: FnPtr + 'static,
