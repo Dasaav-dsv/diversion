@@ -1,5 +1,6 @@
 use std::{
     marker::PhantomData,
+    mem,
     ops::Deref,
     sync::{
         Arc,
@@ -19,11 +20,12 @@ use crate::{
     installer::Installer,
 };
 
-pub struct Scope<'scope, Ctx = (), F = fn() -> ()> {
-    join: Vec<Arc<dyn Send + Sync + 'scope>>,
+pub struct Scope<'scope, 'env: 'scope, Ctx = (), F = fn() -> ()> {
+    join: Mutex<Vec<Arc<dyn Send + Sync + 'env>>>,
     data: Arc<ScopeData>,
     scope: PhantomData<&'scope mut &'scope ()>,
-    ctx: PhantomData<fn() -> Ctx>,
+    env: PhantomData<&'env mut &'env ()>,
+    ctx: PhantomData<Ctx>,
     f: F,
 }
 
@@ -33,98 +35,97 @@ struct ScopeData {
 }
 
 #[inline]
-pub fn scope<T>(f: impl FnOnce(&mut Scope<'_>) -> T) -> T {
+pub fn scope<T>(f: impl for<'scope, 'env> FnOnce(&'scope Scope<'scope, 'env>) -> T) -> T {
     scope_with_context(f, || ())
 }
 
 #[inline]
-pub fn scope_with_context<T, Ctx, F>(f: impl FnOnce(&mut Scope<'_, Ctx, F>) -> T, ctx: F) -> T
+pub fn scope_with_context<T, Ctx, F>(
+    f: impl for<'scope, 'env> FnOnce(&'scope Scope<'scope, 'env, Ctx, F>) -> T,
+    ctx: F,
+) -> T
 where
     Ctx: Send + Sync + 'static,
-    F: FnMut() -> Ctx,
+    F: Fn() -> Ctx,
 {
-    let mut scope = Scope::new(ctx);
-    f(&mut scope)
-}
-
-impl<'scope, Ctx, F> Scope<'scope, Ctx, F>
-where
-    Ctx: Send + Sync + 'static,
-    F: FnMut() -> Ctx,
-{
-    fn new(f: F) -> Self {
-        let data = ScopeData {
+    let scope = Scope {
+        join: Mutex::default(),
+        data: Arc::new(ScopeData {
             main_thread: thread::current(),
             scoped_threads: AtomicUsize::new(0),
-        };
-        Self {
-            join: vec![],
-            data: Arc::new(data),
-            scope: PhantomData,
-            ctx: PhantomData,
-            f,
-        }
-    }
+        }),
+        scope: PhantomData,
+        env: PhantomData,
+        ctx: PhantomData,
+        f: ctx,
+    };
 
+    let _guard = DropGuard::new(&scope, |scope| {
+        mem::take(&mut *scope.join.lock())
+            .into_iter()
+            .rev()
+            .for_each(drop);
+
+        while scope.data.scoped_threads.load(Ordering::Acquire) != 0 {
+            thread::park();
+        }
+    });
+
+    f(&scope)
+}
+
+impl<'scope, 'env, Ctx, F> Scope<'scope, 'env, Ctx, F>
+where
+    Ctx: Send + Sync + 'static,
+    F: Fn() -> Ctx,
+{
     pub unsafe fn hook<T, H>(
-        &mut self,
+        &'scope self,
         target: T,
         hook: impl FnOnce(Weak<T, Ctx>) -> H,
     ) -> Result<Handle<T, Ctx>>
     where
         T: FnPtr + 'static,
         for<'a> (T::CC, &'a H): FnThunk<T>,
-        H: Send + Sync + 'scope,
+        H: Send + Sync + 'env,
     {
         unsafe { ScopedHook::hook(self, target, hook) }
     }
 
     pub unsafe fn hook_mut<T, H>(
-        &mut self,
+        &'scope self,
         target: T,
         hook: impl FnOnce(Weak<T, Ctx>) -> H,
     ) -> Result<Handle<T, Ctx>>
     where
         T: FnPtr + 'static,
         for<'a> (T::CC, &'a mut H): FnMutThunk<T>,
-        H: Send + 'scope,
+        H: Send + 'env,
     {
         unsafe { ScopedHookMut::hook(self, target, hook) }
     }
 
     pub unsafe fn hook_once<T, H>(
-        &mut self,
+        &'scope self,
         target: T,
         hook: impl FnOnce(Weak<T, Ctx>) -> H,
     ) -> Result<Handle<T, Ctx>>
     where
         T: FnPtr + 'static,
         (T::CC, H): FnOnceThunk<T>,
-        H: Send + 'scope,
+        H: Send + 'env,
     {
         unsafe { ScopedHookOnce::hook(self, target, hook) }
     }
 }
 
-impl<Ctx, F> Drop for Scope<'_, Ctx, F> {
-    fn drop(&mut self) {
-        for _ in 0..self.join.len() {
-            let _ = self.join.pop();
-        }
-
-        while self.data.scoped_threads.load(Ordering::Acquire) != 0 {
-            thread::park();
-        }
-    }
-}
-
-trait ScopedStrategy<'s, H, T, Ctx>: Sized + Send + Sync + 's
+trait ScopedStrategy<'env, H, T, Ctx>: Sized + Send + Sync + 'env
 where
     T: FnPtr + 'static,
     Ctx: Send + Sync + 'static,
 {
-    unsafe fn hook(
-        scope: &mut Scope<'s, Ctx, impl FnMut() -> Ctx>,
+    unsafe fn hook<'scope>(
+        scope: &'scope Scope<'scope, 'env, Ctx, impl Fn() -> Ctx>,
         target: T,
         hook: impl FnOnce(Weak<T, Ctx>) -> H,
     ) -> Result<Handle<T, Ctx>> {
@@ -138,7 +139,7 @@ where
                 let strong = Arc::new(Self::new(hook(ctx.clone()), &ctx));
                 let weak = Arc::downgrade(&strong);
 
-                scope.join.push(strong);
+                scope.join.lock().push(strong);
 
                 thunk_factory::make_send_sync(move |args| match weak.upgrade() {
                     Some(scoped) => {
