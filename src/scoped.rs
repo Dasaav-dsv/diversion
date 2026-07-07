@@ -1,6 +1,6 @@
 use std::{
     marker::PhantomData,
-    mem,
+    mem::{self, ManuallyDrop},
     ops::Deref,
     sync::{
         Arc,
@@ -21,7 +21,7 @@ use crate::{
 };
 
 pub struct Scope<'scope, 'env: 'scope, Ctx = (), F = fn() -> ()> {
-    join: Mutex<Vec<Arc<dyn Send + Sync + 'env>>>,
+    join: ManuallyDrop<Mutex<Vec<Arc<dyn Send + Sync + 'scope>>>>,
     data: Arc<ScopeData>,
     scope: PhantomData<&'scope mut &'scope ()>,
     env: PhantomData<&'env mut &'env ()>,
@@ -35,13 +35,13 @@ struct ScopeData {
 }
 
 #[inline]
-pub fn scope<T>(f: impl for<'scope, 'env> FnOnce(&'scope Scope<'scope, 'env>) -> T) -> T {
+pub fn scope<'env, T>(f: impl for<'scope> FnOnce(&'scope Scope<'scope, 'env>) -> T) -> T {
     scope_with_context(f, || ())
 }
 
 #[inline]
-pub fn scope_with_context<T, Ctx, F>(
-    f: impl for<'scope, 'env> FnOnce(&'scope Scope<'scope, 'env, Ctx, F>) -> T,
+pub fn scope_with_context<'env, T, Ctx, F>(
+    f: impl for<'scope> FnOnce(&'scope Scope<'scope, 'env, Ctx, F>) -> T,
     ctx: F,
 ) -> T
 where
@@ -49,7 +49,7 @@ where
     F: Fn() -> Ctx,
 {
     let scope = Scope {
-        join: Mutex::default(),
+        join: ManuallyDrop::default(),
         data: Arc::new(ScopeData {
             main_thread: thread::current(),
             scoped_threads: AtomicUsize::new(0),
@@ -113,18 +113,18 @@ where
     where
         T: FnPtr + 'static,
         (T::CC, H): FnOnceThunk<T>,
-        H: Send + 'env,
+        H: Send + 'scope,
     {
         unsafe { ScopedHookOnce::hook(self, target, hook) }
     }
 }
 
-trait ScopedStrategy<'env, H, T, Ctx>: Sized + Send + Sync + 'env
+trait ScopedStrategy<'scope, H, T, Ctx>: Sized + Send + Sync + 'scope
 where
     T: FnPtr + 'static,
     Ctx: Send + Sync + 'static,
 {
-    unsafe fn hook<'scope>(
+    unsafe fn hook<'env>(
         scope: &'scope Scope<'scope, 'env, Ctx, impl Fn() -> Ctx>,
         target: T,
         hook: impl FnOnce(Weak<T, Ctx>) -> H,
