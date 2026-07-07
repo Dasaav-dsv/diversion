@@ -5,9 +5,12 @@ use crate::{
     installer::Installer,
 };
 
+pub use crate::scoped::{Scope, scope, scope_with_context};
+
 pub mod error;
 pub mod hook;
 pub mod installer;
+mod scoped;
 
 /// The result type returned by functions in this crate.
 pub type Result<T> = std::result::Result<T, error::Error>;
@@ -70,54 +73,12 @@ where
     unsafe { Installer::new(target)?.hook_permanent_mut(hook) }
 }
 
-#[inline]
-pub unsafe fn scope<T, H, R>(
-    target: T,
-    hook: impl FnOnce(Weak<T>) -> H,
-    scope: impl FnOnce(&Handle<T>) -> R,
-) -> Result<R>
-where
-    T: FnPtr + 'static,
-    for<'a> (T::CC, &'a H): FnThunk<T>,
-    H: Send + Sync,
-{
-    unsafe { Installer::new(target)?.scope(hook, scope) }
-}
-
-#[inline]
-pub unsafe fn scope_mut<T, H, R>(
-    target: T,
-    hook: impl FnOnce(Weak<T>) -> H,
-    scope: impl FnOnce(&Handle<T>) -> R,
-) -> Result<R>
-where
-    T: FnPtr + 'static,
-    for<'a> (T::CC, &'a mut H): FnMutThunk<T>,
-    H: Send,
-{
-    unsafe { Installer::new(target)?.scope_mut(hook, scope) }
-}
-
-#[inline]
-pub unsafe fn scope_one<T, H, R>(
-    target: T,
-    hook: impl FnOnce(Weak<T>) -> H,
-    scope: impl FnOnce(&Handle<T>) -> R,
-) -> Result<R>
-where
-    T: FnPtr + 'static,
-    (T::CC, H): FnOnceThunk<T>,
-    H: Send,
-{
-    unsafe { Installer::new(target)?.scope_once(hook, scope) }
-}
-
 cfg_select! {
     feature = "parking_lot" => {
-        use parking_lot::{Mutex, RwLock};
+        use parking_lot::Mutex;
     },
     _ => {
         mod mutex;
-        use mutex::{Mutex, RwLock};
+        use mutex::Mutex;
     }
 }
