@@ -2,10 +2,7 @@ use std::{
     marker::PhantomData,
     mem::{self, ManuallyDrop},
     ops::Deref,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::Arc,
     thread::{self, Thread},
 };
 
@@ -21,18 +18,24 @@ use crate::{
 };
 
 pub struct Scope<'scope, 'env: 'scope, Ctx = (), F = fn() -> ()> {
-    join: ManuallyDrop<Mutex<Vec<Arc<dyn Send + Sync + 'scope>>>>,
-    data: Arc<ScopeData>,
+    // Type erased `Arc` pointers to hook closures.
+    // This field must be dropped manually, but does not allocate by default.
+    scoped_hooks: Mutex<ManuallyDrop<ScopedHooks<'scope>>>,
+
+    // The thread that created this scope.
+    main_thread: Thread,
+
+    // See the notes on lifetimes and variance for `std::thread::scope`.
     scope: PhantomData<&'scope mut &'scope ()>,
     env: PhantomData<&'env mut &'env ()>,
+
+    // This injects a 'static context into every hook.
     ctx: PhantomData<Ctx>,
     f: F,
 }
 
-struct ScopeData {
-    main_thread: Thread,
-    scoped_threads: AtomicUsize,
-}
+// The `Arc<Box<dyn Trait>>` nesting makes it possible to call `Arc::into_inner`.
+type ScopedHooks<'scope> = Vec<Arc<Box<dyn Send + Sync + 'scope>>>;
 
 #[inline]
 pub fn scope<'env, T>(f: impl for<'scope> FnOnce(&'scope Scope<'scope, 'env>) -> T) -> T {
@@ -48,12 +51,10 @@ where
     Ctx: Send + Sync + 'static,
     F: Fn() -> Ctx,
 {
+    // `join` is dropped manually to not extend the lifetime of `scope`.
     let scope = Scope {
-        join: ManuallyDrop::default(),
-        data: Arc::new(ScopeData {
-            main_thread: thread::current(),
-            scoped_threads: AtomicUsize::new(0),
-        }),
+        scoped_hooks: Default::default(),
+        main_thread: thread::current(),
         scope: PhantomData,
         env: PhantomData,
         ctx: PhantomData,
@@ -61,13 +62,18 @@ where
     };
 
     let _guard = DropGuard::new(&scope, |scope| {
-        mem::take(&mut *scope.join.lock())
-            .into_iter()
-            .rev()
-            .for_each(drop);
+        // Replaced with a `Vec::default()` so no memory is actually leaked.
+        let scoped_hooks = mem::take(&mut **scope.scoped_hooks.lock());
 
-        while scope.data.scoped_threads.load(Ordering::Acquire) != 0 {
-            thread::park();
+        // Drop in reverse order and wait for any hooks to be done.
+        for scoped in scoped_hooks.into_iter().rev() {
+            let weak = Arc::downgrade(&scoped);
+            if Arc::into_inner(scoped).is_none() {
+                while weak.strong_count() != 0 {
+                    // A hook is holding a strong reference, it will unpark us.
+                    thread::park();
+                }
+            }
         }
     });
 
@@ -132,26 +138,33 @@ where
         let context = (scope.f)();
         let installer = unsafe { Installer::new_with_context(target, context)? };
 
-        let data = scope.data.clone();
+        // The hook will hold on to this (but that's fine since it's 'static).
+        let main_thread = scope.main_thread.clone();
 
         unsafe {
             installer.hook_unchecked_lt(move |ctx| {
-                let strong = Arc::new(Self::new(hook(ctx.clone()), &ctx));
+                let hook = Self::new(hook(ctx.clone()), &ctx);
+
+                let strong = Arc::new(Box::new(hook) as Box<_>);
                 let weak = Arc::downgrade(&strong);
 
-                scope.join.lock().push(strong);
+                // This is the only strong reference when the hook isn't entered.
+                // When the scope exits and drops this, the weak reference will no
+                // longer be upgradeable.
+                scope.scoped_hooks.lock().push(strong);
 
                 thunk_factory::make_send_sync(move |args| match weak.upgrade() {
                     Some(scoped) => {
-                        data.scoped_threads.fetch_add(1, Ordering::Relaxed);
-
-                        let _guard = DropGuard::new(&data.scoped_threads, |scoped_threads| {
-                            if scoped_threads.fetch_sub(1, Ordering::Release) == 0 {
-                                data.main_thread.unpark();
+                        let scoped = DropGuard::new(scoped, |scoped| {
+                            if Arc::into_inner(scoped).is_some() {
+                                // This hook held the last strong reference.
+                                main_thread.unpark();
                             }
                         });
 
-                        scoped.call(args)
+                        // We *know* the concrete type here.
+                        let downcast = <*const (dyn Send + Sync)>::cast::<Self>(&raw const scoped);
+                        (*downcast).call(args)
                     }
                     None => ctx.upgrade().unwrap().original.call(args),
                 })
@@ -164,27 +177,27 @@ where
     unsafe fn call<'a, 'b, 'c>(&self, args: T::Args<'a, 'b, 'c>) -> T::Ret<'a, 'b, 'c>;
 }
 
-struct ScopedHook<'s, H, T, Ctx> {
+struct ScopedHook<'scope, H, T, Ctx> {
     hook: H,
     context: PhantomData<Weak<T, Ctx>>,
-    scope: PhantomData<&'s mut &'s ()>,
+    scope: PhantomData<&'scope mut &'scope ()>,
 }
 
-struct ScopedHookMut<'s, H, T, Ctx> {
+struct ScopedHookMut<'scope, H, T, Ctx> {
     hook: Mutex<H>,
     context: PhantomData<Weak<T, Ctx>>,
-    scope: PhantomData<&'s mut &'s ()>,
+    scope: PhantomData<&'scope mut &'scope ()>,
 }
 
-struct ScopedHookOnce<'s, H, T, Ctx> {
+struct ScopedHookOnce<'scope, H, T, Ctx> {
     hook: Mutex<Option<H>>,
     context: Weak<T, Ctx>,
-    scope: PhantomData<&'s mut &'s ()>,
+    scope: PhantomData<&'scope mut &'scope ()>,
 }
 
-impl<'s, H, T, Ctx> ScopedStrategy<'s, H, T, Ctx> for ScopedHook<'s, H, T, Ctx>
+impl<'scope, H, T, Ctx> ScopedStrategy<'scope, H, T, Ctx> for ScopedHook<'scope, H, T, Ctx>
 where
-    H: Send + Sync + 's,
+    H: Send + Sync + 'scope,
     T: FnPtr + 'static,
     for<'a> (T::CC, &'a H): FnThunk<T>,
     Ctx: Send + Sync + 'static,
@@ -203,9 +216,9 @@ where
     }
 }
 
-impl<'s, H, T, Ctx> ScopedStrategy<'s, H, T, Ctx> for ScopedHookMut<'s, H, T, Ctx>
+impl<'scope, H, T, Ctx> ScopedStrategy<'scope, H, T, Ctx> for ScopedHookMut<'scope, H, T, Ctx>
 where
-    H: Send + 's,
+    H: Send + 'scope,
     T: FnPtr + 'static,
     for<'a> (T::CC, &'a mut H): FnMutThunk<T>,
     Ctx: Send + Sync + 'static,
@@ -224,9 +237,9 @@ where
     }
 }
 
-impl<'s, H, T, Ctx> ScopedStrategy<'s, H, T, Ctx> for ScopedHookOnce<'s, H, T, Ctx>
+impl<'scope, H, T, Ctx> ScopedStrategy<'scope, H, T, Ctx> for ScopedHookOnce<'scope, H, T, Ctx>
 where
-    H: Send + 's,
+    H: Send + 'scope,
     T: FnPtr + 'static,
     (T::CC, H): FnOnceThunk<T>,
     Ctx: Send + Sync + 'static,
@@ -250,24 +263,25 @@ where
     }
 }
 
-struct DropGuard<T, F: Fn(&mut T)>(T, F);
+struct DropGuard<T, F: FnOnce(T)>(ManuallyDrop<(T, F)>);
 
-impl<T, F: Fn(&mut T)> DropGuard<T, F> {
+impl<T, F: FnOnce(T)> DropGuard<T, F> {
     const fn new(t: T, f: F) -> Self {
-        Self(t, f)
+        Self(ManuallyDrop::new((t, f)))
     }
 }
 
-impl<T, F: Fn(&mut T)> Deref for DropGuard<T, F> {
+impl<T, F: FnOnce(T)> Deref for DropGuard<T, F> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.0.0
     }
 }
 
-impl<T, F: Fn(&mut T)> Drop for DropGuard<T, F> {
+impl<T, F: FnOnce(T)> Drop for DropGuard<T, F> {
     fn drop(&mut self) {
-        (self.1)(&mut self.0);
+        let (t, f) = unsafe { ManuallyDrop::take(&mut self.0) };
+        f(t);
     }
 }

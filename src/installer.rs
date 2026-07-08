@@ -81,7 +81,7 @@ where
         H: Send + Sync + 'static,
     {
         // SAFETY: upheld by caller.
-        unsafe { self.hook_static_permanent(move |ctx| (T::CC::default(), hook(ctx))) }
+        unsafe { self.hook_permanent_static(move |ctx| (T::CC::default(), hook(ctx))) }
     }
 
     pub unsafe fn hook_permanent_mut<H>(self, hook: impl FnOnce(Weak<T, Ctx>) -> H) -> Result<()>
@@ -89,21 +89,21 @@ where
         for<'a> (T::CC, &'a mut H): FnMutThunk<T>,
         H: Send + 'static,
     {
-        let with_lock = move |ctx| {
-            let hook = Mutex::new(hook(ctx));
-            thunk_factory::make_send_sync(move |args| unsafe {
-                (T::CC::default(), &mut *hook.lock()).call_mut(args)
-            })
-        };
-
         // SAFETY: upheld by caller.
-        unsafe { self.hook_static_permanent(with_lock) }
+        unsafe {
+            self.hook_permanent_static(move |ctx| {
+                let hook = Mutex::new(hook(ctx));
+                thunk_factory::make_send_sync(move |args| {
+                    (T::CC::default(), &mut *hook.lock()).call_mut(args)
+                })
+            })
+        }
     }
 
     /// # Safety
     ///
     /// Same as [`Self::hook_permanent`] since `H` is already `'static`.
-    unsafe fn hook_static_permanent<H>(self, hook: impl FnOnce(Weak<T, Ctx>) -> H) -> Result<()>
+    unsafe fn hook_permanent_static<H>(self, hook: impl FnOnce(Weak<T, Ctx>) -> H) -> Result<()>
     where
         H: FnThunk<T> + Send + Sync + 'static,
     {
@@ -136,13 +136,13 @@ where
         H: FnMutThunk<T>,
         H: Send,
     {
-        let with_lock = move |ctx| {
-            let hook = Mutex::new(hook(ctx));
-            thunk_factory::make_send_sync(move |args| unsafe { hook.lock().call_mut(args) })
-        };
-
         // SAFETY: lifetime of `H` upheld by caller.
-        unsafe { self.hook_unchecked_lt(with_lock) }
+        unsafe {
+            self.hook_unchecked_lt(move |ctx| {
+                let hook = Mutex::new(hook(ctx));
+                thunk_factory::make_send_sync(move |args| hook.lock().call_mut(args))
+            })
+        }
     }
 
     /// # Safety
