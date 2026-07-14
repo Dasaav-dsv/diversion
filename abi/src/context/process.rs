@@ -183,7 +183,8 @@ impl ProcessContext {
         // SAFETY: reinterpreting `MaybeUninit<u8>` as (aligned) `MaybeUninit<ThunkFn>`.
         let (_, slice, _) = unsafe { self.alloc.align_to_mut::<MaybeUninit<ThunkFn>>() };
 
-        slice.copy_within(slot.index..len - slot.index, slot.index + 1);
+        slice.copy_within(slot.index..len, slot.index + 1);
+
         slice[slot.index] = MaybeUninit::new(ThunkFn {
             addr: slot.addr,
             thunk,
