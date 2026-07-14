@@ -72,13 +72,3 @@ where
 {
     unsafe { Installer::new(target)?.hook_permanent_mut(hook) }
 }
-
-cfg_select! {
-    feature = "parking_lot" => {
-        use parking_lot::Mutex;
-    },
-    _ => {
-        mod mutex;
-        use mutex::Mutex;
-    }
-}

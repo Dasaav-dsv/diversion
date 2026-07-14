@@ -8,9 +8,13 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 atomic-wait = "=1.1.0"
 bump-into = "=0.8.3"
+closure-ffi.workspace = true
+parking_lot = { version = "0.12.5", optional = true }
+xxhash-rust = { version = "0.8.16", features = ["xxh3"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "^0.2" # same as atomic-wait
 
 [features]
 __private-abi = []
+parking_lot = ["dep:parking_lot"]

@@ -101,7 +101,6 @@ dependencies = [
  "closure-ffi",
  "closure-ffi-iced-x86",
  "diversion-abi",
- "parking_lot",
  "thiserror",
 ]
 
@@ -111,7 +110,10 @@ version = "0.1.0"
 dependencies = [
  "atomic-wait",
  "bump-into",
+ "closure-ffi",
  "libc",
+ "parking_lot",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -496,3 +498,9 @@ name = "windows_x86_64_msvc"
 version = "0.48.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed94fce61571a4006852b7389a063ab983c02eb1bb37b47f8272ce92d06d9538"
+
+[[package]]
+name = "xxhash-rust"
+version = "0.8.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4d93c89cdc2d3a63c3ec48ffe926931bdc069eafa8e4402fe6d8f790c9d1e576"

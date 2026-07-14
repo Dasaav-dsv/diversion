@@ -17,3 +17,12 @@ pub const VERSION: u32 = {
     }
     version
 };
+
+cfg_select! {
+    feature = "parking_lot" => {
+        pub use parking_lot::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
+    },
+    _ => {
+        pub use mutex::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
+    }
+}

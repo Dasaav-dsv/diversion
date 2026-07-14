@@ -9,14 +9,16 @@ license = "MIT OR Apache-2.0"
 members = ["abi"]
 resolver = "3"
 
-[dependencies]
+[workspace.dependencies]
 closure-ffi = "5.1.2"
+
+[dependencies]
+closure-ffi.workspace = true
 closure-ffi-iced-x86 = "1.21.0-commit50066fb" # same as closure-ffi
 diversion-abi = { path = "abi", version = "0.1.0", features = [
     "__private-abi",
 ] }
-parking_lot = { version = "0.12.5", optional = true }
 thiserror = "2.0.18"
 
 [features]
-parking_lot = ["dep:parking_lot"]
+parking_lot = ["diversion-abi/parking_lot"]
