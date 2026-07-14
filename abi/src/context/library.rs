@@ -15,7 +15,7 @@ use crate::{Address, Mutex, MutexGuard, RwLock};
 /// DO NOT TOUCH: this is a part of the internal, perma-unstable API.
 #[derive(Debug)]
 pub struct LibraryContext {
-    closures: HashMap<ClosureThunkId, &'static RwLock<ErasedClosure>, Xxh3DefaultBuilder>,
+    closures: ClosureMap,
 }
 
 /// Library-wide `diversion` context mutex guard.
@@ -28,12 +28,14 @@ pub struct ErasedClosure(*const (dyn Send + Sync));
 
 type ClosureThunkId = (Address, TypeId);
 
+type ClosureMap = HashMap<ClosureThunkId, &'static RwLock<ErasedClosure>, Xxh3DefaultBuilder>;
+
 static LIBRARY_CONTEXT: Mutex<LibraryContext> = Mutex::new(LibraryContext::new());
 
 impl LibraryContext {
     const fn new() -> Self {
         Self {
-            closures: HashMap::with_hasher(Xxh3DefaultBuilder::new()),
+            closures: ClosureMap::with_hasher(Xxh3DefaultBuilder::new()),
         }
     }
 
@@ -57,7 +59,7 @@ impl LibraryContext {
         let address = f.to_ptr().addr();
         let type_id = f.type_id();
 
-        *self.closures.entry((address, type_id)).or_insert_with(|| {
+        self.closures.entry((address, type_id)).or_insert_with(|| {
             let value = RwLock::new(ErasedClosure::new());
             Box::leak(Box::new(value))
         })
