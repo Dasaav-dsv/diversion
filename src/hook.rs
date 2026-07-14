@@ -1,6 +1,5 @@
 use std::{
     fmt,
-    ops::Deref,
     sync::{self, Arc},
 };
 
@@ -8,31 +7,36 @@ mod leak;
 mod scoped;
 mod temp;
 
+use closure_ffi::{UntypedBareFn, traits::FnPtr};
 pub use scoped::{Scope, scope, scope_with_context};
 
-pub struct Context<T, Ctx = ()> {
-    pub(crate) original_fn_ptr: T,
-    pub(crate) original_weak: sync::Weak<dyn Send + Sync + 'static>,
-    inner: Ctx,
+pub struct Hook<T, Ctx = ()> {
+    pub context: Ctx,
+    original: T,
+    _ref: Option<Arc<UntypedBareFn<dyn Send + Sync>>>,
 }
 
-pub type Handle<T, Ctx = ()> = Arc<Context<T, Ctx>>;
+pub type Handle<T, Ctx = ()> = Arc<Hook<T, Ctx>>;
 
-pub type Weak<T, Ctx = ()> = sync::Weak<Context<T, Ctx>>;
+pub type Weak<T, Ctx = ()> = sync::Weak<Hook<T, Ctx>>;
 
-impl<T, Ctx> Deref for Context<T, Ctx> {
-    type Target = Ctx;
-
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        &self.inner
+impl<T, Ctx> Hook<T, Ctx>
+where
+    T: FnPtr + 'static,
+{
+    #[inline(always)]
+    pub unsafe fn call_original<'a, 'b, 'c>(
+        &self,
+        args: T::Args<'a, 'b, 'c>,
+    ) -> T::Ret<'a, 'b, 'c> {
+        unsafe { self.original.call(args) }
     }
 }
 
-impl<Ctx: fmt::Debug> fmt::Debug for Context<Ctx> {
+impl<T, Ctx: fmt::Debug> fmt::Debug for Hook<T, Ctx> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HookContext")
-            .field("inner", &self.inner)
+            .field("context", &self.context)
             .finish()
     }
 }

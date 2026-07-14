@@ -2,7 +2,10 @@ use std::{
     marker::PhantomData,
     mem::{self, ManuallyDrop},
     ops::Deref,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     thread::{self, Thread},
 };
 
@@ -89,40 +92,40 @@ where
     pub unsafe fn hook<T, H>(
         &'scope self,
         target: T,
-        hook: impl FnOnce(Weak<T, Ctx>) -> H,
+        source: impl FnOnce(Weak<T, Ctx>) -> H,
     ) -> Result<Handle<T, Ctx>>
     where
         T: FnPtr + 'static,
         for<'a> (T::CC, &'a H): FnThunk<T>,
         H: Send + Sync + 'env,
     {
-        unsafe { ScopedHook::hook(self, target, hook) }
+        unsafe { ScopedHook::hook(self, target, source) }
     }
 
     pub unsafe fn hook_mut<T, H>(
         &'scope self,
         target: T,
-        hook: impl FnOnce(Weak<T, Ctx>) -> H,
+        source: impl FnOnce(Weak<T, Ctx>) -> H,
     ) -> Result<Handle<T, Ctx>>
     where
         T: FnPtr + 'static,
         for<'a> (T::CC, &'a mut H): FnMutThunk<T>,
         H: Send + 'env,
     {
-        unsafe { ScopedHookMut::hook(self, target, hook) }
+        unsafe { ScopedHookMut::hook(self, target, source) }
     }
 
     pub unsafe fn hook_once<T, H>(
         &'scope self,
         target: T,
-        hook: impl FnOnce(Weak<T, Ctx>) -> H,
+        source: impl FnOnce(Weak<T, Ctx>) -> H,
     ) -> Result<Handle<T, Ctx>>
     where
         T: FnPtr + 'static,
         (T::CC, H): FnOnceThunk<T>,
         H: Send + 'scope,
     {
-        unsafe { ScopedHookOnce::hook(self, target, hook) }
+        unsafe { ScopedHookOnce::hook(self, target, source) }
     }
 }
 
@@ -154,7 +157,7 @@ where
     unsafe fn hook<'env>(
         scope: &'scope Scope<'scope, 'env, Ctx, impl Fn() -> Ctx>,
         target: T,
-        hook: impl FnOnce(Weak<T, Ctx>) -> H,
+        source: impl FnOnce(Weak<T, Ctx>) -> H,
     ) -> Result<Handle<T, Ctx>> {
         let context = (scope.f)();
         let installer = unsafe { Installer::new_with_context(target, context)? };
@@ -164,9 +167,9 @@ where
 
         unsafe {
             installer.hook_unchecked_lt(move |ctx| {
-                let hook = Self::new(hook(ctx.clone()), &ctx);
+                let hook_fn = Self::new(source(ctx.clone()), &ctx);
 
-                let strong = Arc::new(Box::new(hook) as Box<_>);
+                let strong = Arc::new(Box::new(hook_fn) as Box<_>);
                 let weak = Arc::downgrade(&strong);
 
                 // This is the only strong reference when the hook isn't entered.
@@ -187,7 +190,7 @@ where
                         let downcast = <*const (dyn Send + Sync)>::cast::<Self>(&raw const scoped);
                         (*downcast).call(args)
                     }
-                    None => ctx.upgrade().unwrap().original_fn_ptr.call(args),
+                    None => ctx.upgrade().unwrap().original.call(args),
                 })
             })
         }
@@ -212,6 +215,7 @@ struct ScopedHookMut<'scope, H, T, Ctx> {
 
 struct ScopedHookOnce<'scope, H, T, Ctx> {
     hook: Mutex<Option<H>>,
+    flag: AtomicBool,
     context: Weak<T, Ctx>,
     scope: PhantomData<&'scope mut &'scope ()>,
 }
@@ -268,6 +272,7 @@ where
     fn new(hook: H, ctx: &Weak<T, Ctx>) -> Self {
         Self {
             hook: Mutex::new(Some(hook)),
+            flag: AtomicBool::new(true),
             context: ctx.clone(),
             scope: PhantomData,
         }
@@ -276,9 +281,13 @@ where
     #[inline(always)]
     unsafe fn call<'a, 'b, 'c>(&self, args: T::Args<'a, 'b, 'c>) -> T::Ret<'a, 'b, 'c> {
         unsafe {
-            match self.hook.lock().take() {
-                Some(scoped) => (T::CC::default(), scoped).call_once(args),
-                None => self.context.upgrade().unwrap().original_fn_ptr.call(args),
+            if self.flag.load(Ordering::Acquire)
+                && let Some(hook) = self.hook.lock().take()
+            {
+                self.flag.store(false, Ordering::Release);
+                (T::CC::default(), hook).call_once(args)
+            } else {
+                self.context.upgrade().unwrap().call_original(args)
             }
         }
     }
