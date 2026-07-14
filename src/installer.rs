@@ -1,13 +1,12 @@
-use std::marker::PhantomData;
+use std::fmt;
 
 use closure_ffi::traits::FnPtr;
 
 use crate::Result;
 
-#[derive(Debug)]
 pub struct Installer<T, Ctx = ()> {
+    target: T,
     context: Ctx,
-    _marker: PhantomData<T>,
 }
 
 impl<T> Installer<T, ()>
@@ -20,7 +19,11 @@ where
     }
 }
 
-impl<T, Ctx> Installer<T, Ctx> {
+impl<T, Ctx> Installer<T, Ctx>
+where
+    T: FnPtr + 'static,
+    Ctx: Send + Sync + 'static,
+{
     pub unsafe fn new_with_context(target: T, context: Ctx) -> Result<Self> {
         todo!()
     }
@@ -28,8 +31,24 @@ impl<T, Ctx> Installer<T, Ctx> {
     #[inline]
     pub fn with_context<New>(self, context: New) -> Installer<T, New>
     where
-        New: Send + Sync,
+        New: Send + Sync + 'static,
     {
-        todo!()
+        Installer {
+            target: self.target,
+            context,
+        }
+    }
+}
+
+impl<T, Ctx> fmt::Debug for Installer<T, Ctx>
+where
+    T: fmt::Debug,
+    Ctx: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Installer")
+            .field("target", &self.target)
+            .field("context", &self.context)
+            .finish()
     }
 }

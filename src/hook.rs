@@ -11,7 +11,8 @@ mod temp;
 pub use scoped::{Scope, scope, scope_with_context};
 
 pub struct Context<T, Ctx = ()> {
-    pub(crate) original: T,
+    pub(crate) original_fn_ptr: T,
+    pub(crate) original_weak: sync::Weak<dyn Send + Sync + 'static>,
     inner: Ctx,
 }
 

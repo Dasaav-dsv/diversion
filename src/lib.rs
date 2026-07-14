@@ -5,6 +5,9 @@ use crate::{
     installer::Installer,
 };
 
+#[cfg(feature = "bare_hrtb")]
+pub use closure_ffi::bare_hrtb;
+
 pub mod error;
 pub mod hook;
 pub mod installer;

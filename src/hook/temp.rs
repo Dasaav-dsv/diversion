@@ -22,8 +22,7 @@ where
         (T::CC, H): FnThunk<T>,
         H: Send + Sync + 'static,
     {
-        // SAFETY: `H: 'static`, the rest of the contract is upheld by the caller.
-        unsafe { self.hook_unchecked_lt(move |ctx| (T::CC::default(), hook(ctx))) }
+        unsafe { self.temp_hook(move |ctx| (T::CC::default(), hook(ctx))) }
     }
 
     pub unsafe fn hook_mut<H>(self, hook: impl FnOnce(Weak<T, Ctx>) -> H) -> Result<Handle<T, Ctx>>
@@ -31,8 +30,12 @@ where
         (T::CC, H): FnMutThunk<T>,
         H: Send + 'static,
     {
-        // SAFETY: `H: 'static`, the rest of the contract is upheld by the caller.
-        unsafe { self.hook_unchecked_lt_mut(move |ctx| (T::CC::default(), hook(ctx))) }
+        unsafe {
+            self.temp_hook(move |ctx| {
+                let hook = Mutex::new((T::CC::default(), hook(ctx)));
+                thunk_factory::make_send_sync(move |args| hook.lock().call_mut(args))
+            })
+        }
     }
 
     pub unsafe fn hook_once<H>(self, hook: impl FnOnce(Weak<T, Ctx>) -> H) -> Result<Handle<T, Ctx>>
@@ -40,61 +43,10 @@ where
         (T::CC, H): FnOnceThunk<T>,
         H: Send + 'static,
     {
-        // SAFETY: `H: 'static`, the rest of the contract is upheld by the caller.
-        unsafe { self.hook_unchecked_lt_once(move |ctx| (T::CC::default(), hook(ctx))) }
-    }
-
-    /// # Safety
-    ///
-    /// Same as [`Self::hook`], except the `'static` lifetimes are not enforced!
-    /// They **must outlive** the returned [`Handle`].
-    pub(crate) unsafe fn hook_unchecked_lt<H>(
-        self,
-        hook: impl FnOnce(Weak<T, Ctx>) -> H,
-    ) -> Result<Handle<T, Ctx>>
-    where
-        H: FnThunk<T> + Send + Sync,
-    {
-        todo!()
-    }
-
-    /// # Safety
-    ///
-    /// Same as [`Self::hook_mut`], except the `'static` lifetimes are not enforced!
-    /// They **must outlive** the returned [`Handle`].
-    unsafe fn hook_unchecked_lt_mut<H>(
-        self,
-        hook: impl FnOnce(Weak<T, Ctx>) -> H,
-    ) -> Result<Handle<T, Ctx>>
-    where
-        H: FnMutThunk<T>,
-        H: Send,
-    {
-        // SAFETY: lifetime of `H` upheld by caller.
         unsafe {
-            self.hook_unchecked_lt(move |ctx| {
-                let hook = Mutex::new(hook(ctx));
-                thunk_factory::make_send_sync(move |args| hook.lock().call_mut(args))
-            })
-        }
-    }
-
-    /// # Safety
-    ///
-    /// Same as [`Self::hook_once`], except the `'static` lifetimes are not enforced!
-    /// They **must outlive** the returned [`Handle`].
-    unsafe fn hook_unchecked_lt_once<H>(
-        self,
-        hook: impl FnOnce(Weak<T, Ctx>) -> H,
-    ) -> Result<Handle<T, Ctx>>
-    where
-        H: FnOnceThunk<T>,
-        H: Send,
-    {
-        // SAFETY: lifetime of `H` upheld by caller.
-        unsafe {
-            self.hook_unchecked_lt(move |ctx| {
-                let hook = Mutex::new(Some(hook(ctx.clone())));
+            self.temp_hook(move |ctx| {
+                let hook_once = (T::CC::default(), hook(ctx.clone()));
+                let hook = Mutex::new(Some(hook_once));
                 let flag = AtomicBool::new(true);
                 thunk_factory::make_send_sync(move |args| {
                     if flag.load(Ordering::Acquire)
@@ -103,10 +55,17 @@ where
                         flag.store(false, Ordering::Release);
                         hook.call_once(args)
                     } else {
-                        ctx.upgrade().unwrap().original.call(args)
+                        ctx.upgrade().unwrap().original_fn_ptr.call(args)
                     }
                 })
             })
         }
+    }
+
+    unsafe fn temp_hook<H>(self, hook: impl FnOnce(Weak<T, Ctx>) -> H) -> Result<Handle<T, Ctx>>
+    where
+        H: FnThunk<T> + Send + Sync + 'static,
+    {
+        todo!()
     }
 }

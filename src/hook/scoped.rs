@@ -126,6 +126,26 @@ where
     }
 }
 
+impl<T, Ctx> Installer<T, Ctx>
+where
+    T: FnPtr + 'static,
+    Ctx: Send + Sync + 'static,
+{
+    /// # Safety
+    ///
+    /// Same as [`Self::hook`], except the `'static` lifetimes are not enforced!
+    /// They **must outlive** the returned [`Handle`].
+    unsafe fn hook_unchecked_lt<H>(
+        self,
+        hook: impl FnOnce(Weak<T, Ctx>) -> H,
+    ) -> Result<Handle<T, Ctx>>
+    where
+        H: FnThunk<T> + Send + Sync,
+    {
+        todo!()
+    }
+}
+
 trait ScopedStrategy<'scope, H, T, Ctx>: Sized + Send + Sync + 'scope
 where
     T: FnPtr + 'static,
@@ -167,7 +187,7 @@ where
                         let downcast = <*const (dyn Send + Sync)>::cast::<Self>(&raw const scoped);
                         (*downcast).call(args)
                     }
-                    None => ctx.upgrade().unwrap().original.call(args),
+                    None => ctx.upgrade().unwrap().original_fn_ptr.call(args),
                 })
             })
         }
@@ -258,7 +278,7 @@ where
         unsafe {
             match self.hook.lock().take() {
                 Some(scoped) => (T::CC::default(), scoped).call_once(args),
-                None => self.context.upgrade().unwrap().original.call(args),
+                None => self.context.upgrade().unwrap().original_fn_ptr.call(args),
             }
         }
     }
