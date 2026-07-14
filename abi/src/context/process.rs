@@ -10,7 +10,6 @@ use bump_into::BumpInto;
 
 use crate::{
     Address,
-    context::library::{LibraryContext, LibraryContextGuard},
     mmap::MmapBuilder,
     mutex::pod::{PodMutex, PodMutexGuard},
 };
@@ -33,11 +32,8 @@ pub struct ProcessContextGuard {
     // The exclusive borrow, protected by the global lock guard...
     process: &'static mut ProcessContext,
 
-    // ...the global lock acquired after the library lock...
+    // ...the global lock acquired after the library lock.
     _process_guard: PodMutexGuard<'static>,
-
-    // ...finally, the library lock.
-    library_guard: LibraryContextGuard,
 }
 
 /// A static, type erased atomic pointer to a function.
@@ -74,13 +70,10 @@ static PROCESS_CONTEXT: AtomicPtr<ProcessContextInner> = AtomicPtr::new(ptr::nul
 impl ProcessContext {
     /// Acquires a lock on the global context.
     ///
-    /// Requires a [`LibraryContextGuard`] to ensure consistent lock order.
-    /// The locks are released in reverse order (see [`ProcessContextGuard`] field order).
-    ///
     /// # Safety
     ///
     /// DO NOT TOUCH: this is a part of the internal, perma-unstable API.
-    pub fn acquire(library_guard: LibraryContextGuard) -> io::Result<ProcessContextGuard> {
+    pub fn acquire() -> io::Result<ProcessContextGuard> {
         let mut inner_ptr = PROCESS_CONTEXT.load(Ordering::Acquire);
 
         // Check if we need to initialize the static pointer.
@@ -151,7 +144,6 @@ impl ProcessContext {
         Ok(ProcessContextGuard {
             process,
             _process_guard,
-            library_guard,
         })
     }
 
@@ -208,18 +200,6 @@ impl ProcessContext {
     }
 }
 
-impl ProcessContextGuard {
-    #[inline]
-    pub fn library_context(&self) -> &LibraryContext {
-        &self.library_guard
-    }
-
-    #[inline]
-    pub fn library_context_mut(&mut self) -> &mut LibraryContext {
-        &mut self.library_guard
-    }
-}
-
 impl Deref for ProcessContextGuard {
     type Target = ProcessContext;
 
@@ -238,11 +218,10 @@ impl DerefMut for ProcessContextGuard {
 
 #[cfg(test)]
 mod tests {
-    use crate::context::{library::LibraryContext, process::ProcessContext};
+    use crate::context::process::ProcessContext;
 
     #[test]
     fn acquire_context() {
-        let library = LibraryContext::acquire();
-        let _context = ProcessContext::acquire(library).unwrap();
+        let _context = ProcessContext::acquire().unwrap();
     }
 }
