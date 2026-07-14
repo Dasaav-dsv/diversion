@@ -4,6 +4,12 @@ use std::{
     sync::{self, Arc},
 };
 
+mod leak;
+mod scoped;
+mod temp;
+
+pub use scoped::{Scope, scope, scope_with_context};
+
 pub struct Context<T, Ctx = ()> {
     pub(crate) original: T,
     inner: Ctx,

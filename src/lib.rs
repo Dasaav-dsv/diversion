@@ -5,12 +5,9 @@ use crate::{
     installer::Installer,
 };
 
-pub use crate::scoped::{Scope, scope, scope_with_context};
-
 pub mod error;
 pub mod hook;
 pub mod installer;
-mod scoped;
 
 /// The result type returned by functions in this crate.
 pub type Result<T> = std::result::Result<T, error::Error>;
@@ -60,7 +57,7 @@ where
     (T::CC, H): FnThunk<T>,
     H: Send + Sync + 'static,
 {
-    unsafe { Installer::new(target)?.hook_permanent(hook) }
+    unsafe { Installer::new(target)?.leak_hook(hook) }
 }
 
 #[inline]
@@ -70,5 +67,5 @@ where
     for<'a> (T::CC, &'a mut H): FnMutThunk<T>,
     H: Send + 'static,
 {
-    unsafe { Installer::new(target)?.hook_permanent_mut(hook) }
+    unsafe { Installer::new(target)?.leak_hook_mut(hook) }
 }
