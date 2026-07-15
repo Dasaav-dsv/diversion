@@ -190,7 +190,7 @@ where
                         let downcast = <*const (dyn Send + Sync)>::cast::<Self>(&raw const scoped);
                         (*downcast).call(args)
                     }
-                    None => ctx.upgrade().unwrap().original.call(args),
+                    None => ctx.upgrade().unwrap().call_original(args),
                 })
             })
         }
@@ -201,19 +201,28 @@ where
     unsafe fn call<'a, 'b, 'c>(&self, args: T::Args<'a, 'b, 'c>) -> T::Ret<'a, 'b, 'c>;
 }
 
-struct ScopedHook<'scope, H, T, Ctx> {
+struct ScopedHook<'scope, H, T, Ctx>
+where
+    T: FnPtr + 'static,
+{
     hook: H,
     context: PhantomData<Weak<T, Ctx>>,
     scope: PhantomData<&'scope mut &'scope ()>,
 }
 
-struct ScopedHookMut<'scope, H, T, Ctx> {
+struct ScopedHookMut<'scope, H, T, Ctx>
+where
+    T: FnPtr + 'static,
+{
     hook: Mutex<H>,
     context: PhantomData<Weak<T, Ctx>>,
     scope: PhantomData<&'scope mut &'scope ()>,
 }
 
-struct ScopedHookOnce<'scope, H, T, Ctx> {
+struct ScopedHookOnce<'scope, H, T, Ctx>
+where
+    T: FnPtr + 'static,
+{
     hook: Mutex<Option<H>>,
     flag: AtomicBool,
     context: Weak<T, Ctx>,

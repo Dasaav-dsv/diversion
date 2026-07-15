@@ -1,7 +1,7 @@
 use closure_ffi::traits::{FnMutThunk, FnOnceThunk, FnPtr, FnThunk};
 
 use crate::{
-    hook::{Handle, Weak},
+    hook::{Handle, Static, Weak},
     installer::Installer,
 };
 
@@ -54,21 +54,21 @@ where
 }
 
 #[inline]
-pub unsafe fn leak_hook<T, H>(target: T, source: impl FnOnce(Weak<T>) -> H) -> Result<()>
+pub unsafe fn static_hook<T, H>(target: T, source: impl FnOnce(Static<T>) -> H) -> Result<()>
 where
     T: FnPtr + 'static,
     (T::CC, H): FnThunk<T>,
     H: Send + Sync + 'static,
 {
-    unsafe { Installer::new(target)?.leak_hook(source) }
+    unsafe { Installer::new(target)?.static_hook(source) }
 }
 
 #[inline]
-pub unsafe fn leak_hook_mut<T, H>(target: T, source: impl FnOnce(Weak<T>) -> H) -> Result<()>
+pub unsafe fn static_hook_mut<T, H>(target: T, source: impl FnOnce(Static<T>) -> H) -> Result<()>
 where
     T: FnPtr + 'static,
     for<'a> (T::CC, &'a mut H): FnMutThunk<T>,
     H: Send + 'static,
 {
-    unsafe { Installer::new(target)?.leak_hook_mut(source) }
+    unsafe { Installer::new(target)?.static_hook_mut(source) }
 }

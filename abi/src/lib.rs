@@ -1,6 +1,7 @@
 #![cfg(feature = "__private-abi")]
 
 pub mod context;
+pub mod linked_slab;
 mod mmap;
 mod mutex;
 
