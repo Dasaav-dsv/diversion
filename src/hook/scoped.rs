@@ -129,26 +129,6 @@ where
     }
 }
 
-impl<T, Ctx> Installer<T, Ctx>
-where
-    T: FnPtr + 'static,
-    Ctx: Send + Sync + 'static,
-{
-    /// # Safety
-    ///
-    /// Same as [`Self::hook`], except the `'static` lifetimes are not enforced!
-    /// They **must outlive** the returned [`Handle`].
-    unsafe fn hook_unchecked_lt<H>(
-        self,
-        hook: impl FnOnce(Weak<T, Ctx>) -> H,
-    ) -> Result<Handle<T, Ctx>>
-    where
-        H: FnThunk<T> + Send + Sync,
-    {
-        todo!()
-    }
-}
-
 trait ScopedStrategy<'scope, H, T, Ctx>: Sized + Send + Sync + 'scope
 where
     T: FnPtr + 'static,
@@ -165,9 +145,9 @@ where
         // The hook will hold on to this (but that's fine since it's 'static).
         let main_thread = scope.main_thread.clone();
 
-        unsafe {
-            installer.hook_unchecked_lt(move |ctx| {
-                let hook_fn = Self::new(source(ctx.clone()), &ctx);
+        let hook = unsafe {
+            installer.hook_unchecked_lt(move |hook| {
+                let hook_fn = Self::new(source(hook.clone()), &hook);
 
                 let strong = Arc::new(Box::new(hook_fn) as Box<_>);
                 let weak = Arc::downgrade(&strong);
@@ -190,10 +170,12 @@ where
                         let downcast = <*const (dyn Send + Sync)>::cast::<Self>(&raw const scoped);
                         (*downcast).call(args)
                     }
-                    None => ctx.upgrade().unwrap().call_original(args),
+                    None => hook.upgrade().unwrap().call_original(args),
                 })
             })
-        }
+        };
+
+        Ok(hook)
     }
 
     fn new(hook: H, ctx: &Weak<T, Ctx>) -> Self;

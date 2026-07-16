@@ -1,17 +1,33 @@
+use std::{
+    fmt,
+    ops::Deref,
+    sync::{OnceLock, atomic::Ordering},
+};
+
 use closure_ffi::{
-    thunk_factory,
+    BareFnAny, thunk_factory,
     traits::{FnMutThunk, FnPtr, FnThunk},
 };
 use diversion_abi::Mutex;
 
-use crate::{Result, hook::Static, installer::Installer};
+use crate::{
+    hook::{RawHook, Static},
+    installer::Installer,
+};
 
-impl<T, Ctx> Installer<T, Ctx>
+pub struct Hook<T, Ctx>
+where
+    T: FnPtr + 'static,
+{
+    inner: OnceLock<RawHook<T, Ctx>>,
+}
+
+impl<T, Ctx> Installer<'static, T, Ctx>
 where
     T: FnPtr + 'static,
     Ctx: Send + Sync + 'static,
 {
-    pub unsafe fn static_hook<H>(self, source: impl FnOnce(Static<T, Ctx>) -> H) -> Result<()>
+    pub unsafe fn static_hook<H>(self, source: impl FnOnce(Static<T, Ctx>) -> H) -> Static<T, Ctx>
     where
         (T::CC, H): FnThunk<T>,
         H: Send + Sync + 'static,
@@ -19,7 +35,10 @@ where
         unsafe { self.leak_hook(move |hook| (T::CC::default(), source(hook))) }
     }
 
-    pub unsafe fn static_hook_mut<H>(self, source: impl FnOnce(Static<T, Ctx>) -> H) -> Result<()>
+    pub unsafe fn static_hook_mut<H>(
+        self,
+        source: impl FnOnce(Static<T, Ctx>) -> H,
+    ) -> Static<T, Ctx>
     where
         for<'a> (T::CC, &'a mut H): FnMutThunk<T>,
         H: Send + 'static,
@@ -34,10 +53,72 @@ where
         }
     }
 
-    unsafe fn leak_hook<H>(self, source: impl FnOnce(Static<T, Ctx>) -> H) -> Result<()>
+    unsafe fn leak_hook<H>(self, source: impl FnOnce(Static<T, Ctx>) -> H) -> Static<T, Ctx>
     where
         H: FnThunk<T> + Send + Sync + 'static,
     {
-        todo!()
+        // The `OnceLock` makes it possible to inject the hook context into `source` before
+        // the original function pointer is known.
+        let hook: &'static Hook<T, Ctx> = Box::leak(Box::new(Hook {
+            inner: OnceLock::new(),
+        }));
+
+        // Trying to upgrade and access inside `source` will deadlock.
+        let hook_fn = source(hook);
+
+        // Leak and atomically insert the hook function.
+        // Turning it directly into a thunk will have the smallest possible overhead.
+        let thunk = BareFnAny::<T, dyn Send + Sync + 'static>::with_thunk(hook_fn).leak();
+        let original = self.thunk.swap(thunk, Ordering::AcqRel);
+
+        // Make `original` available and unblock hook context access.
+        hook.inner.get_or_init(move || RawHook {
+            context: self.context,
+            original,
+        });
+
+        hook
+    }
+}
+
+impl<T, Ctx> Hook<T, Ctx>
+where
+    T: FnPtr + 'static,
+{
+    /// Calls the original (hooked) function trampoline.
+    ///
+    /// # Safety
+    ///
+    /// The invariants of the hooked function must be preserved when calling this.
+    #[inline(always)]
+    pub unsafe fn call_original<'a, 'b, 'c>(
+        &self,
+        args: T::Args<'a, 'b, 'c>,
+    ) -> T::Ret<'a, 'b, 'c> {
+        // SAFETY: function invariants upheld by caller.
+        unsafe { self.inner.wait().original.call(args) }
+    }
+}
+
+impl<T, Ctx> Deref for Hook<T, Ctx>
+where
+    T: FnPtr + 'static,
+{
+    type Target = Ctx;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.inner.wait().context
+    }
+}
+
+impl<T, Ctx: fmt::Debug> fmt::Debug for Hook<T, Ctx>
+where
+    T: FnPtr + 'static,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Hook")
+            .field("inner", &self.inner.wait())
+            .finish()
     }
 }

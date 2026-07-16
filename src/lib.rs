@@ -16,9 +16,9 @@ pub mod installer;
 pub type Result<T> = std::result::Result<T, error::Error>;
 
 #[inline]
-pub unsafe fn install<T>(target: T) -> Result<Installer<T>>
+pub unsafe fn install<'a, T>(target: T) -> Result<Installer<'a, T>>
 where
-    T: FnPtr + 'static,
+    T: FnPtr + 'a,
 {
     unsafe { Installer::new(target) }
 }
@@ -30,7 +30,10 @@ where
     (T::CC, H): FnThunk<T>,
     H: Send + Sync + 'static,
 {
-    unsafe { Installer::new(target)?.hook(source) }
+    unsafe {
+        let installer = Installer::new(target)?;
+        Ok(installer.hook(source))
+    }
 }
 
 #[inline]
@@ -40,7 +43,10 @@ where
     (T::CC, H): FnMutThunk<T>,
     H: Send + 'static,
 {
-    unsafe { Installer::new(target)?.hook_mut(source) }
+    unsafe {
+        let installer = Installer::new(target)?;
+        Ok(installer.hook_mut(source))
+    }
 }
 
 #[inline]
@@ -50,25 +56,37 @@ where
     (T::CC, H): FnOnceThunk<T>,
     H: Send + 'static,
 {
-    unsafe { Installer::new(target)?.hook_once(source) }
+    unsafe {
+        let installer = Installer::new(target)?;
+        Ok(installer.hook_once(source))
+    }
 }
 
 #[inline]
-pub unsafe fn static_hook<T, H>(target: T, source: impl FnOnce(Static<T>) -> H) -> Result<()>
+pub unsafe fn static_hook<T, H>(target: T, source: impl FnOnce(Static<T>) -> H) -> Result<Static<T>>
 where
     T: FnPtr + 'static,
     (T::CC, H): FnThunk<T>,
     H: Send + Sync + 'static,
 {
-    unsafe { Installer::new(target)?.static_hook(source) }
+    unsafe {
+        let installer = Installer::new(target)?;
+        Ok(installer.static_hook(source))
+    }
 }
 
 #[inline]
-pub unsafe fn static_hook_mut<T, H>(target: T, source: impl FnOnce(Static<T>) -> H) -> Result<()>
+pub unsafe fn static_hook_mut<T, H>(
+    target: T,
+    source: impl FnOnce(Static<T>) -> H,
+) -> Result<Static<T>>
 where
     T: FnPtr + 'static,
     for<'a> (T::CC, &'a mut H): FnMutThunk<T>,
     H: Send + 'static,
 {
-    unsafe { Installer::new(target)?.static_hook_mut(source) }
+    unsafe {
+        let installer = Installer::new(target)?;
+        Ok(installer.static_hook_mut(source))
+    }
 }

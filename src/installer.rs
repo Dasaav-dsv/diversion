@@ -1,17 +1,19 @@
 use std::fmt;
 
 use closure_ffi::traits::FnPtr;
+use diversion_abi::fn_ptr::AtomicFnPtr;
 
 use crate::Result;
 
-pub struct Installer<T, Ctx = ()> {
-    target: T,
-    context: Ctx,
+pub struct Installer<'a, T: 'a, Ctx = ()> {
+    pub(crate) target: T,
+    pub(crate) context: Ctx,
+    pub(crate) thunk: &'a AtomicFnPtr<T>,
 }
 
-impl<T> Installer<T, ()>
+impl<'a, T> Installer<'a, T, ()>
 where
-    T: FnPtr + 'static,
+    T: FnPtr + 'a,
 {
     #[inline]
     pub unsafe fn new(target: T) -> Result<Self> {
@@ -19,9 +21,9 @@ where
     }
 }
 
-impl<T, Ctx> Installer<T, Ctx>
+impl<'a, T, Ctx> Installer<'a, T, Ctx>
 where
-    T: FnPtr + 'static,
+    T: FnPtr + 'a,
     Ctx: Send + Sync + 'static,
 {
     pub unsafe fn new_with_context(target: T, context: Ctx) -> Result<Self> {
@@ -29,18 +31,19 @@ where
     }
 
     #[inline]
-    pub fn with_context<New>(self, context: New) -> Installer<T, New>
+    pub fn with_context<New>(self, context: New) -> Installer<'a, T, New>
     where
         New: Send + Sync + 'static,
     {
         Installer {
             target: self.target,
+            thunk: self.thunk,
             context,
         }
     }
 }
 
-impl<T, Ctx> fmt::Debug for Installer<T, Ctx>
+impl<T, Ctx> fmt::Debug for Installer<'_, T, Ctx>
 where
     T: fmt::Debug,
     Ctx: fmt::Debug,

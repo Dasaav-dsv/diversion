@@ -1,13 +1,15 @@
 use std::{
     any::{Any, TypeId},
     collections::HashMap,
-    sync::Arc,
+    sync::{Arc, OnceLock, atomic::AtomicIsize},
 };
 
 use closure_ffi::{UntypedBareFn, traits::FnPtr};
 use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 
-use crate::{Address, Mutex, MutexGuard, RwLock, linked_slab::LinkedSlab};
+use crate::{
+    Address, Mutex, MutexGuard, RwLock, fn_ptr::AtomicErasedFnPtr, linked_slab::LinkedSlab,
+};
 
 /// Library-wide `diversion` context.
 ///
@@ -17,15 +19,17 @@ pub struct LibraryContext {
 }
 
 /// Library-wide `diversion` context mutex guard.
-///
-/// DO NOT TOUCH: this is a part of the internal, perma-unstable API.
 pub type LibraryContextGuard = MutexGuard<'static, LibraryContext>;
 
 /// A type erased closure associated with a single hook.
 pub type ErasedClosure = Arc<UntypedBareFn<dyn Send + Sync>>;
 
 /// A list of type erased closures associated with a hook thunk.
-pub type ErasedClosureList = RwLock<LinkedSlab<ErasedClosure>>;
+pub struct ErasedClosureList {
+    pub closures: RwLock<LinkedSlab<ErasedClosure>>,
+    pub extra_count: AtomicIsize,
+    pub original_ptr: OnceLock<AtomicErasedFnPtr>,
+}
 
 type ClosureThunkId = (Address, TypeId);
 
@@ -63,5 +67,15 @@ impl LibraryContext {
         self.closures
             .entry((address, type_id))
             .or_insert_with(|| Box::leak(Box::default()))
+    }
+}
+
+impl Default for ErasedClosureList {
+    fn default() -> Self {
+        Self {
+            closures: RwLock::default(),
+            extra_count: AtomicIsize::new(-1),
+            original_ptr: OnceLock::new(),
+        }
     }
 }

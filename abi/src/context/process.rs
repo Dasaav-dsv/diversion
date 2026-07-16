@@ -10,6 +10,7 @@ use bump_into::BumpInto;
 
 use crate::{
     Address,
+    fn_ptr::AtomicErasedFnPtr,
     mmap::MmapBuilder,
     mutex::pod::{PodMutex, PodMutexGuard},
 };
@@ -36,11 +37,6 @@ pub struct ProcessContextGuard {
     _process_guard: PodMutexGuard<'static>,
 }
 
-/// A static, type erased atomic pointer to a function.
-#[derive(Debug)]
-#[repr(transparent)]
-pub struct AtomicErasedFn(AtomicPtr<()>);
-
 /// Empty slot corresponding to an address passed to [`ProcessContext::get_thunk`].
 #[derive(Debug)]
 pub struct ThunkSlot {
@@ -62,7 +58,7 @@ struct ProcessContextInner {
 #[repr(C)]
 struct ThunkFn {
     addr: Address,
-    thunk: &'static AtomicErasedFn,
+    thunk: &'static AtomicErasedFnPtr,
 }
 
 static PROCESS_CONTEXT: AtomicPtr<ProcessContextInner> = AtomicPtr::new(ptr::null_mut());
@@ -150,7 +146,7 @@ impl ProcessContext {
     /// Gets an atomic pointer to the thunk pointer if the function at this address
     /// has been hooked, or the slot to insert a new thunk at.
     #[inline]
-    pub fn get_thunk(&self, addr: Address) -> Result<&'static AtomicErasedFn, ThunkSlot> {
+    pub fn get_thunk(&self, addr: Address) -> Result<&'static AtomicErasedFnPtr, ThunkSlot> {
         let inner = &self.inner;
 
         // SAFETY: bytes up to `alloc_len` must be valid `ThunkFn` instances.
@@ -169,7 +165,7 @@ impl ProcessContext {
     pub fn insert_thunk(
         &mut self,
         slot: ThunkSlot,
-        thunk: &'static AtomicErasedFn,
+        thunk: &'static AtomicErasedFnPtr,
     ) -> Result<(), ThunkSlot> {
         let inner = &mut self.inner;
         let len = inner.alloc_len / size_of::<ThunkFn>();
