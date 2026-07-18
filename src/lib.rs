@@ -1,7 +1,7 @@
 use closure_ffi::traits::{FnMutThunk, FnOnceThunk, FnPtr, FnThunk};
 
 use crate::{
-    hook::{Handle, Static, Weak},
+    hook::{Handle, Static, Weak, leak::StaticHook, temp::TemporaryHook},
     installer::Installer,
 };
 

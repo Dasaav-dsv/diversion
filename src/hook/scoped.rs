@@ -17,8 +17,8 @@ use diversion_abi::Mutex;
 
 use crate::{
     Result,
-    hook::{Handle, Weak},
-    installer::Installer,
+    hook::{Handle, Weak, temp::TemporaryHookExt},
+    installer::{Installer, with::HookInstallerWithContext},
 };
 
 pub struct Scope<'scope, 'env: 'scope, Ctx = (), F = fn() -> ()> {
@@ -139,40 +139,40 @@ where
         target: T,
         source: impl FnOnce(Weak<T, Ctx>) -> H,
     ) -> Result<Handle<T, Ctx>> {
-        let context = (scope.f)();
-        let installer = unsafe { Installer::new_with_context(target, context)? };
-
         // The hook will hold on to this (but that's fine since it's 'static).
         let main_thread = scope.main_thread.clone();
 
         let hook = unsafe {
-            installer.hook_unchecked_lt(move |hook| {
-                let hook_fn = Self::new(source(hook.clone()), &hook);
+            Installer::new(target)?
+                .with_context((scope.f)())
+                .hook_unchecked_lt(move |hook| {
+                    let hook_fn = Self::new(source(hook.clone()), &hook);
 
-                let strong = Arc::new(Box::new(hook_fn) as Box<_>);
-                let weak = Arc::downgrade(&strong);
+                    let strong = Arc::new(Box::new(hook_fn) as Box<_>);
+                    let weak = Arc::downgrade(&strong);
 
-                // This is the only strong reference when the hook isn't entered.
-                // When the scope exits and drops this, the weak reference will no
-                // longer be upgradeable.
-                scope.scoped_hooks.lock().push(strong);
+                    // This is the only strong reference when the hook isn't entered.
+                    // When the scope exits and drops this, the weak reference will no
+                    // longer be upgradeable.
+                    scope.scoped_hooks.lock().push(strong);
 
-                thunk_factory::make_send_sync(move |args| match weak.upgrade() {
-                    Some(scoped) => {
-                        let scoped = DropGuard::new(scoped, |scoped| {
-                            if Arc::into_inner(scoped).is_some() {
-                                // This hook held the last strong reference.
-                                main_thread.unpark();
-                            }
-                        });
+                    thunk_factory::make_send_sync(move |args| match weak.upgrade() {
+                        Some(scoped) => {
+                            let scoped = DropGuard::new(scoped, |scoped| {
+                                if Arc::into_inner(scoped).is_some() {
+                                    // This hook held the last strong reference.
+                                    main_thread.unpark();
+                                }
+                            });
 
-                        // We *know* the concrete type here.
-                        let downcast = <*const (dyn Send + Sync)>::cast::<Self>(&raw const scoped);
-                        (*downcast).call(args)
-                    }
-                    None => hook.upgrade().unwrap().call_original(args),
+                            // We *know* the concrete type here.
+                            let downcast =
+                                <*const (dyn Send + Sync)>::cast::<Self>(&raw const scoped);
+                            (*downcast).call(args)
+                        }
+                        None => hook.upgrade().unwrap().call_original(args),
+                    })
                 })
-            })
         };
 
         Ok(hook)

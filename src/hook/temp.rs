@@ -20,7 +20,7 @@ use diversion_abi::{
 
 use crate::{
     hook::{Handle, RawHook, Weak},
-    installer::Installer,
+    installer::HookInstaller,
 };
 
 pub struct Hook<T, Ctx>
@@ -32,12 +32,12 @@ where
     key: AtomicUsize,
 }
 
-impl<'a, T, Ctx> Installer<'a, T, Ctx>
+pub trait TemporaryHook<T, Ctx>: HookInstaller<Target = T, Context = Ctx>
 where
-    T: FnPtr + 'a,
+    T: FnPtr,
     Ctx: Send + Sync + 'static,
 {
-    pub unsafe fn hook<H>(self, source: impl FnOnce(Weak<T, Ctx>) -> H) -> Handle<T, Ctx>
+    unsafe fn hook<H>(self, source: impl FnOnce(Weak<T, Ctx>) -> H) -> Handle<T, Ctx>
     where
         (T::CC, H): FnThunk<T>,
         H: Send + Sync + 'static,
@@ -46,7 +46,7 @@ where
         unsafe { self.hook_unchecked_lt(move |hook| (T::CC::default(), source(hook))) }
     }
 
-    pub unsafe fn hook_mut<H>(self, source: impl FnOnce(Weak<T, Ctx>) -> H) -> Handle<T, Ctx>
+    unsafe fn hook_mut<H>(self, source: impl FnOnce(Weak<T, Ctx>) -> H) -> Handle<T, Ctx>
     where
         (T::CC, H): FnMutThunk<T>,
         H: Send + 'static,
@@ -60,7 +60,7 @@ where
         }
     }
 
-    pub unsafe fn hook_once<H>(self, source: impl FnOnce(Weak<T, Ctx>) -> H) -> Handle<T, Ctx>
+    unsafe fn hook_once<H>(self, source: impl FnOnce(Weak<T, Ctx>) -> H) -> Handle<T, Ctx>
     where
         (T::CC, H): FnOnceThunk<T>,
         H: Send + 'static,
@@ -84,15 +84,18 @@ where
             })
         }
     }
+}
 
+pub(super) trait TemporaryHookExt<T, Ctx>: HookInstaller<Target = T, Context = Ctx>
+where
+    T: FnPtr,
+    Ctx: Send + Sync + 'static,
+{
     /// # Safety
     ///
-    /// Same as [`Self::hook`], except `H: 'static` is not enforced!
+    /// Same as [`TemporaryHook::hook`], except `H: 'static` is not enforced!
     /// It **must outlive** the returned [`Handle`].
-    pub(super) unsafe fn hook_unchecked_lt<H>(
-        self,
-        source: impl FnOnce(Weak<T, Ctx>) -> H,
-    ) -> Handle<T, Ctx>
+    unsafe fn hook_unchecked_lt<H>(self, source: impl FnOnce(Weak<T, Ctx>) -> H) -> Handle<T, Ctx>
     where
         H: FnThunk<T> + Send + Sync,
     {
@@ -123,7 +126,7 @@ where
     }
 
     fn into_unowned_handle(self) -> Handle<T, Ctx> {
-        let list = LibraryContext::acquire().closures(self.target);
+        let list = LibraryContext::acquire().closures(self.target());
 
         let original_ptr = list.original_ptr.get_or_init(|| {
             // SAFETY: we make sure to initialize this before `thunk` is ever called.
@@ -150,14 +153,12 @@ where
             )
             .leak();
 
-            let original = self
-                .thunk
-                .update(Ordering::AcqRel, Ordering::Acquire, |original| {
-                    // Initialize `original` before `thunk` may be called,
-                    // fulfilling the `AtomicFnPtr::new_uninit` safety contract.
-                    original_ptr.store(original, Ordering::Release);
-                    thunk
-                });
+            let original = self.update_thunk(|original| {
+                // Initialize `original` before `thunk` may be called,
+                // fulfilling the `AtomicFnPtr::new_uninit` safety contract.
+                original_ptr.store(original, Ordering::Release);
+                thunk
+            });
 
             AtomicFnPtr::new(original).erased()
         });
@@ -167,7 +168,7 @@ where
 
         Handle::new(Hook {
             inner: RawHook {
-                context: self.context,
+                context: self.into_context(),
                 original,
             },
             list,
@@ -175,6 +176,22 @@ where
             key: AtomicUsize::new(usize::MAX),
         })
     }
+}
+
+impl<H, T, Ctx> TemporaryHook<T, Ctx> for H
+where
+    T: FnPtr,
+    Ctx: Send + Sync + 'static,
+    H: HookInstaller<Target = T, Context = Ctx>,
+{
+}
+
+impl<H, T, Ctx> TemporaryHookExt<T, Ctx> for H
+where
+    T: FnPtr,
+    Ctx: Send + Sync + 'static,
+    H: HookInstaller<Target = T, Context = Ctx>,
+{
 }
 
 impl<T, Ctx> Hook<T, Ctx>

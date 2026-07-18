@@ -1,8 +1,4 @@
-use std::{
-    fmt,
-    ops::Deref,
-    sync::{OnceLock, atomic::Ordering},
-};
+use std::{fmt, ops::Deref, sync::OnceLock};
 
 use closure_ffi::{
     BareFnAny, thunk_factory,
@@ -12,7 +8,7 @@ use diversion_abi::Mutex;
 
 use crate::{
     hook::{RawHook, Static},
-    installer::Installer,
+    installer::HookInstaller,
 };
 
 pub struct Hook<T, Ctx>
@@ -22,12 +18,12 @@ where
     inner: OnceLock<RawHook<T, Ctx>>,
 }
 
-impl<T, Ctx> Installer<'static, T, Ctx>
+pub trait StaticHook<T, Ctx>: HookInstaller<Target = T, Context = Ctx>
 where
     T: FnPtr + 'static,
     Ctx: Send + Sync + 'static,
 {
-    pub unsafe fn static_hook<H>(self, source: impl FnOnce(Static<T, Ctx>) -> H) -> Static<T, Ctx>
+    unsafe fn static_hook<H>(self, source: impl FnOnce(Static<T, Ctx>) -> H) -> Static<T, Ctx>
     where
         (T::CC, H): FnThunk<T>,
         H: Send + Sync + 'static,
@@ -35,10 +31,7 @@ where
         unsafe { self.leak_hook(move |hook| (T::CC::default(), source(hook))) }
     }
 
-    pub unsafe fn static_hook_mut<H>(
-        self,
-        source: impl FnOnce(Static<T, Ctx>) -> H,
-    ) -> Static<T, Ctx>
+    unsafe fn static_hook_mut<H>(self, source: impl FnOnce(Static<T, Ctx>) -> H) -> Static<T, Ctx>
     where
         for<'a> (T::CC, &'a mut H): FnMutThunk<T>,
         H: Send + 'static,
@@ -69,16 +62,24 @@ where
         // Leak and atomically insert the hook function.
         // Turning it directly into a thunk will have the smallest possible overhead.
         let thunk = BareFnAny::<T, dyn Send + Sync + 'static>::with_thunk(hook_fn).leak();
-        let original = self.thunk.swap(thunk, Ordering::AcqRel);
+        let original = self.update_thunk(|_| thunk);
 
         // Make `original` available and unblock hook context access.
         hook.inner.get_or_init(move || RawHook {
-            context: self.context,
+            context: self.into_context(),
             original,
         });
 
         hook
     }
+}
+
+impl<H, T, Ctx> StaticHook<T, Ctx> for H
+where
+    T: FnPtr + 'static,
+    Ctx: Send + Sync + 'static,
+    H: HookInstaller<Target = T, Context = Ctx>,
+{
 }
 
 impl<T, Ctx> Hook<T, Ctx>

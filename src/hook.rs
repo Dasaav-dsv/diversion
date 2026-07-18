@@ -6,21 +6,15 @@ use std::{
 
 use closure_ffi::traits::FnPtr;
 
-pub use crate::hook::{
-    leak::Hook as StaticHook,
-    scoped::{Scope, scope, scope_with_context},
-    temp::Hook,
-};
+pub mod leak;
+pub mod scoped;
+pub mod temp;
 
-mod leak;
-mod scoped;
-mod temp;
+pub type Static<T, Ctx = ()> = &'static leak::Hook<T, Ctx>;
 
-pub type Static<T, Ctx = ()> = &'static StaticHook<T, Ctx>;
+pub type Handle<T, Ctx = ()> = Arc<temp::Hook<T, Ctx>>;
 
-pub type Handle<T, Ctx = ()> = Arc<Hook<T, Ctx>>;
-
-pub type Weak<T, Ctx = ()> = sync::Weak<Hook<T, Ctx>>;
+pub type Weak<T, Ctx = ()> = sync::Weak<temp::Hook<T, Ctx>>;
 
 struct RawHook<T, Ctx>
 where
