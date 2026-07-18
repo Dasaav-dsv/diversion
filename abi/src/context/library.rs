@@ -8,7 +8,10 @@ use closure_ffi::{UntypedBareFn, traits::FnPtr};
 use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 
 use crate::{
-    Address, Mutex, MutexGuard, RwLock, fn_ptr::AtomicErasedFnPtr, linked_slab::LinkedSlab,
+    Address,
+    fn_ptr::AtomicErasedFnPtr,
+    linked_slab::LinkedSlab,
+    sync::{Mutex, MutexGuard, RwLock},
 };
 
 /// Library-wide `diversion` context.

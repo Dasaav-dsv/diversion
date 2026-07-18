@@ -13,7 +13,7 @@ use closure_ffi::{
     thunk_factory,
     traits::{FnMutThunk, FnOnceThunk, FnPtr, FnThunk},
 };
-use diversion_abi::Mutex;
+use diversion_abi::sync::Mutex;
 
 use crate::{
     Result,

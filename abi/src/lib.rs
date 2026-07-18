@@ -4,7 +4,7 @@ pub mod context;
 pub mod fn_ptr;
 pub mod linked_slab;
 mod mmap;
-mod mutex;
+pub mod sync;
 
 /// A memory address without provenance (`usize` alias).
 pub type Address = usize;
@@ -19,12 +19,3 @@ pub const VERSION: u32 = {
     }
     version
 };
-
-cfg_select! {
-    feature = "parking_lot" => {
-        pub use parking_lot::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
-    },
-    _ => {
-        pub use mutex::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
-    }
-}

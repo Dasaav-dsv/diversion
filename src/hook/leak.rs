@@ -4,7 +4,7 @@ use closure_ffi::{
     BareFnAny, thunk_factory,
     traits::{FnMutThunk, FnPtr, FnThunk},
 };
-use diversion_abi::Mutex;
+use diversion_abi::sync::Mutex;
 
 use crate::{
     hook::{RawHook, Static},

@@ -13,9 +13,9 @@ use closure_ffi::{
     traits::{FnMutThunk, FnOnceThunk, FnPtr, FnThunk},
 };
 use diversion_abi::{
-    Mutex,
     context::library::{ErasedClosureList, LibraryContext},
     fn_ptr::AtomicFnPtr,
+    sync::Mutex,
 };
 
 use crate::{

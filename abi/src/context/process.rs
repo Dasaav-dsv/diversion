@@ -12,7 +12,7 @@ use crate::{
     Address,
     fn_ptr::AtomicErasedFnPtr,
     mmap::MmapBuilder,
-    mutex::pod::{PodMutex, PodMutexGuard},
+    sync::pod::{PodMutex, PodMutexGuard},
 };
 
 /// Process-wide `diversion` context.
