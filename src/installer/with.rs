@@ -11,12 +11,12 @@ pub struct WithContext<'a, H: ?Sized, Ctx> {
     context: Ctx,
 }
 
-impl<H, Ctx> WithContext<'_, H, Ctx> {
+impl<'a, H, Old, New> WithContext<'a, WithContext<'_, H, Old>, New> {
     #[inline]
-    pub fn with_context<New>(&self, context: New) -> WithContext<'_, Self, New> {
+    pub fn flatten(self) -> WithContext<'a, H, New> {
         WithContext {
-            inner: self,
-            context,
+            inner: self.inner.inner,
+            context: self.context,
         }
     }
 }
