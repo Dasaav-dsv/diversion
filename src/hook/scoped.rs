@@ -143,7 +143,7 @@ where
         let main_thread = scope.main_thread.clone();
 
         let hook = unsafe {
-            Installer::new(target)?
+            Installer::install(target)?
                 .with_context((scope.f)())
                 .hook_unchecked_lt(move |hook| {
                     let hook_fn = Self::new(source(hook.clone()), &hook);

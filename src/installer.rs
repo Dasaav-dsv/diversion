@@ -27,7 +27,7 @@ impl<'a, T> Installer<'a, T>
 where
     T: FnPtr + 'a,
 {
-    pub unsafe fn new(target: T) -> Result<Self> {
+    pub unsafe fn install(target: T) -> Result<Self> {
         todo!()
     }
 }

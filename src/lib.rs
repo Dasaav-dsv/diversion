@@ -20,7 +20,7 @@ pub unsafe fn install<'a, T>(target: T) -> Result<Installer<'a, T>>
 where
     T: FnPtr + 'a,
 {
-    unsafe { Installer::new(target) }
+    unsafe { Installer::install(target) }
 }
 
 #[inline]
@@ -31,7 +31,7 @@ where
     H: Send + Sync + 'static,
 {
     unsafe {
-        let installer = Installer::new(target)?;
+        let installer = Installer::install(target)?;
         Ok(installer.hook(source))
     }
 }
@@ -44,7 +44,7 @@ where
     H: Send + 'static,
 {
     unsafe {
-        let installer = Installer::new(target)?;
+        let installer = Installer::install(target)?;
         Ok(installer.hook_mut(source))
     }
 }
@@ -57,7 +57,7 @@ where
     H: Send + 'static,
 {
     unsafe {
-        let installer = Installer::new(target)?;
+        let installer = Installer::install(target)?;
         Ok(installer.hook_once(source))
     }
 }
@@ -70,7 +70,7 @@ where
     H: Send + Sync + 'static,
 {
     unsafe {
-        let installer = Installer::new(target)?;
+        let installer = Installer::install(target)?;
         Ok(installer.static_hook(source))
     }
 }
@@ -86,7 +86,7 @@ where
     H: Send + 'static,
 {
     unsafe {
-        let installer = Installer::new(target)?;
+        let installer = Installer::install(target)?;
         Ok(installer.static_hook_mut(source))
     }
 }
