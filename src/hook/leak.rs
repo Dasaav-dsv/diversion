@@ -123,3 +123,87 @@ where
             .finish()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use rayon::iter::{IntoParallelIterator, ParallelIterator};
+
+    use crate::{
+        hook::leak::StaticHook,
+        installer::{HookInstaller, tests::mock_installer},
+    };
+
+    #[test]
+    fn static_hook() {
+        static STR: &str = "This is not a concatenation of the input strings";
+
+        let installer = mock_installer();
+        let concat_str = installer.target();
+
+        let hooked = unsafe {
+            installer.static_hook(|_| |_, _| STR.to_owned());
+            concat_str("Hello, ".to_owned(), "World!".to_owned())
+        };
+
+        assert_eq!(hooked, STR);
+    }
+
+    #[test]
+    fn static_hook_captures() {
+        let new_a = "Goodbye, ".to_owned();
+
+        let installer = mock_installer();
+        let concat_str = installer.target();
+
+        let hooked = unsafe {
+            installer.static_hook(|hook| move |_, b| hook.call_original((new_a.clone(), b)));
+            concat_str("Hello, ".to_owned(), "World!".to_owned())
+        };
+
+        assert_eq!(hooked, "Goodbye, World!");
+    }
+
+    #[test]
+    fn static_hook_mut() {
+        let installer = mock_installer();
+        let concat_str = installer.target();
+
+        let hooked = unsafe {
+            installer.static_hook_mut(|_| {
+                let mut times_called = 0;
+                move |_, _| {
+                    times_called += 1;
+                    times_called.to_string()
+                }
+            });
+
+            let mut hooked = (0..1000)
+                .into_par_iter()
+                .map(|_| concat_str(String::new(), String::new()).parse().unwrap())
+                .collect::<Vec<u16>>();
+
+            hooked.sort_unstable();
+
+            hooked
+        };
+
+        assert_eq!(hooked, (1..=1000).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn static_hook_chained() {
+        let installer = &mock_installer();
+        let concat_str = installer.target();
+
+        let hooked = unsafe {
+            for i in (1..=6).rev() {
+                installer.static_hook(|hook| {
+                    move |a, b| hook.call_original((format!("{a}{b}"), i.to_string()))
+                });
+            }
+            concat_str(String::new(), String::new())
+        };
+
+        assert_eq!(hooked, "123456");
+    }
+}

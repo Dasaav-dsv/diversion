@@ -1,4 +1,4 @@
-use std::ops::Deref;
+use std::{fmt, ops::Deref};
 
 use crate::installer::HookInstaller;
 
@@ -24,7 +24,7 @@ where
     }
 }
 
-unsafe impl<H, Ctx> HookInstaller for WithContext<H, Ctx>
+impl<H, Ctx> HookInstaller for WithContext<H, Ctx>
 where
     H: Deref<Target: HookInstaller>,
     Ctx: Send + Sync + 'static,
@@ -75,5 +75,18 @@ where
             inner: self.inner.clone(),
             context: self.context.clone(),
         }
+    }
+}
+
+impl<H, Ctx> fmt::Debug for WithContext<H, Ctx>
+where
+    H: fmt::Debug,
+    Ctx: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Installer")
+            .field("inner", &self.inner)
+            .field("context", &self.context)
+            .finish()
     }
 }

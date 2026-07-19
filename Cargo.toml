@@ -23,3 +23,6 @@ thiserror = "2.0.18"
 [features]
 parking_lot = ["diversion-abi/parking_lot"]
 bare_hrtb = ["closure-ffi/proc_macros"]
+
+[dev-dependencies]
+rayon = "1.12.0"
