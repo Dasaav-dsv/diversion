@@ -282,3 +282,137 @@ where
             .finish_non_exhaustive()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use rayon::iter::{IntoParallelIterator, ParallelIterator};
+
+    use crate::{
+        hook::temp::TemporaryHook,
+        installer::{
+            HookInstaller,
+            tests::{ConcatStrFn, mock_installer},
+        },
+    };
+
+    #[test]
+    fn hook() {
+        static STR: &str = "This is not a concatenation of the input strings";
+
+        let installer = mock_installer();
+        let concat_str = installer.target();
+
+        let hooked = unsafe {
+            let _hook = installer.hook(|_| |_, _| STR.to_owned());
+            concat_str("Hello, ".to_owned(), "World!".to_owned())
+        };
+
+        assert_eq!(hooked, STR);
+
+        assert_unhooked(concat_str);
+    }
+
+    #[test]
+    fn hook_captures() {
+        let new_a = "Goodbye, ".to_owned();
+
+        let installer = mock_installer();
+        let concat_str = installer.target();
+
+        let hooked = unsafe {
+            let _hook = installer
+                .hook(|hook| move |_, b| hook.upgrade().unwrap().call_original((new_a.clone(), b)));
+            concat_str("Hello, ".to_owned(), "World!".to_owned())
+        };
+
+        assert_eq!(hooked, "Goodbye, World!");
+
+        assert_unhooked(concat_str);
+    }
+
+    #[test]
+    fn hook_mut() {
+        let installer = mock_installer();
+        let concat_str = installer.target();
+
+        let hooked = unsafe {
+            let _hook = installer.hook_mut(|_| {
+                let mut times_called = 0;
+                move |_, _| {
+                    times_called += 1;
+                    times_called.to_string()
+                }
+            });
+
+            let mut hooked = (0..1000)
+                .into_par_iter()
+                .map(|_| concat_str(String::new(), String::new()).parse().unwrap())
+                .collect::<Vec<u16>>();
+
+            hooked.sort_unstable();
+
+            hooked
+        };
+
+        assert_eq!(hooked, (1..=1000).collect::<Vec<_>>());
+
+        assert_unhooked(concat_str);
+    }
+
+    #[test]
+    fn hook_once() {
+        let new_a = "Goodbye, ".to_owned();
+
+        let installer = mock_installer();
+        let concat_str = installer.target();
+
+        let hooked = unsafe {
+            let _hook = installer.hook_once(|hook| {
+                move |_, b| hook.upgrade().unwrap().call_original((new_a.clone(), b))
+            });
+
+            let hooked = concat_str("Hello, ".to_owned(), "World!".to_owned());
+
+            assert_unhooked(concat_str);
+
+            hooked
+        };
+
+        assert_eq!(hooked, "Goodbye, World!");
+
+        assert_unhooked(concat_str);
+    }
+
+    #[test]
+    fn static_hook_chained() {
+        let installer = mock_installer();
+        let concat_str = installer.target();
+
+        let hooked = unsafe {
+            let _handles = (1..=6)
+                .rev()
+                .map(|i| {
+                    installer.clone().hook(|hook| {
+                        move |a, b| {
+                            hook.upgrade()
+                                .unwrap()
+                                .call_original((format!("{a}{b}"), i.to_string()))
+                        }
+                    })
+                })
+                .collect::<Vec<_>>();
+
+            concat_str(String::new(), String::new())
+        };
+
+        assert_eq!(hooked, "123456");
+
+        assert_unhooked(concat_str);
+    }
+
+    #[track_caller]
+    fn assert_unhooked(concat_str: ConcatStrFn) {
+        let unhooked = unsafe { concat_str("Hello, ".to_owned(), "World!".to_owned()) };
+        assert_eq!(unhooked, "Hello, World!");
+    }
+}

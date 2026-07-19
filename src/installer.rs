@@ -18,29 +18,6 @@ pub trait HookInstaller: Sized {
     fn into_context(self) -> Self::Context;
 }
 
-impl<'a, H> HookInstaller for &'a H
-where
-    H: HookInstaller + Clone,
-{
-    type Target = H::Target;
-    type Context = H::Context;
-
-    #[inline]
-    fn target(&self) -> Self::Target {
-        (*self).target()
-    }
-
-    #[inline]
-    fn update_thunk(&self, f: impl FnMut(Self::Target) -> Self::Target) -> Self::Target {
-        (*self).update_thunk(f)
-    }
-
-    #[inline]
-    fn into_context(self) -> Self::Context {
-        self.clone().into_context()
-    }
-}
-
 #[derive(Clone)]
 pub struct Installer<'a, T> {
     target: T,
@@ -99,7 +76,7 @@ pub(crate) mod tests {
 
     use crate::installer::{HookInstaller, Installer};
 
-    type ConcatStrFn = unsafe extern "C" fn(String, String) -> String;
+    pub type ConcatStrFn = unsafe extern "C" fn(String, String) -> String;
 
     type MockInstaller = Installer<'static, ConcatStrFn>;
 

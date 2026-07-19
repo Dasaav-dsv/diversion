@@ -192,12 +192,12 @@ mod tests {
 
     #[test]
     fn static_hook_chained() {
-        let installer = &mock_installer();
+        let installer = mock_installer();
         let concat_str = installer.target();
 
         let hooked = unsafe {
             for i in (1..=6).rev() {
-                installer.static_hook(|hook| {
+                installer.clone().static_hook(|hook| {
                     move |a, b| hook.call_original((format!("{a}{b}"), i.to_string()))
                 });
             }
