@@ -1,8 +1,15 @@
-use std::{fmt, ops::Deref, sync::OnceLock};
+use std::{
+    fmt,
+    ops::Deref,
+    sync::{
+        OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use closure_ffi::{
     BareFnAny, thunk_factory,
-    traits::{FnMutThunk, FnPtr, FnThunk},
+    traits::{FnMutThunk, FnOnceThunk, FnPtr, FnThunk},
 };
 use diversion_abi::sync::Mutex;
 
@@ -41,6 +48,31 @@ where
                 let hook_fn = Mutex::new(source(hook));
                 thunk_factory::make_send_sync(move |args| {
                     (T::CC::default(), &mut *hook_fn.lock()).call_mut(args)
+                })
+            })
+        }
+    }
+
+    unsafe fn static_hook_once<H>(self, source: impl FnOnce(Static<T, Ctx>) -> H) -> Static<T, Ctx>
+    where
+        (T::CC, H): FnOnceThunk<T>,
+        H: Send + 'static,
+    {
+        // SAFETY: `H` is already `'static`.
+        unsafe {
+            self.leak_hook(move |hook| {
+                let hook_fn_once = (T::CC::default(), source(hook));
+                let hook_fn = Mutex::new(Some(hook_fn_once));
+                let flag = AtomicBool::new(true);
+                thunk_factory::make_send_sync(move |args| {
+                    if flag.load(Ordering::Acquire)
+                        && let Some(hook) = hook_fn.lock().take()
+                    {
+                        flag.store(false, Ordering::Release);
+                        hook.call_once(args)
+                    } else {
+                        hook.call_original(args)
+                    }
                 })
             })
         }
@@ -188,6 +220,27 @@ mod tests {
         };
 
         assert_eq!(hooked, (1..=1000).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn static_hook_once() {
+        let new_a = "Goodbye, ".to_owned();
+
+        let installer = mock_installer();
+        let concat_str = installer.target();
+
+        let hooked = unsafe {
+            installer.static_hook_once(|hook| move |_, b| hook.call_original((new_a.clone(), b)));
+
+            let hooked = concat_str("Hello, ".to_owned(), "World!".to_owned());
+
+            let unhooked = concat_str("Hello, ".to_owned(), "World!".to_owned());
+            assert_eq!(unhooked, "Hello, World!");
+
+            hooked
+        };
+
+        assert_eq!(hooked, "Goodbye, World!");
     }
 
     #[test]

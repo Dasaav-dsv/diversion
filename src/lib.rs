@@ -90,3 +90,19 @@ where
         Ok(installer.static_hook_mut(source))
     }
 }
+
+#[inline]
+pub unsafe fn static_hook_once<T, H>(
+    target: T,
+    source: impl FnOnce(Static<T>) -> H,
+) -> Result<Static<T>>
+where
+    T: FnPtr + 'static,
+    (T::CC, H): FnOnceThunk<T>,
+    H: Send + 'static,
+{
+    unsafe {
+        let installer = Installer::install(target)?;
+        Ok(installer.static_hook_once(source))
+    }
+}
