@@ -42,11 +42,13 @@ pub struct Scope<'scope, 'env: 'scope, Ctx = (), F = fn() -> ()> {
 type ScopedHooks<'scope> = Vec<Arc<Box<dyn Send + Sync + 'scope>>>;
 
 #[inline]
+#[must_use]
 pub fn scope<'env, T>(f: impl for<'scope> FnOnce(&'scope Scope<'scope, 'env>) -> T) -> T {
     scope_with_context(f, || ())
 }
 
 #[inline]
+#[must_use]
 pub fn scope_with_context<'env, T, Ctx, F>(
     f: impl for<'scope> FnOnce(&'scope Scope<'scope, 'env, Ctx, F>) -> T,
     ctx: F,
@@ -89,6 +91,7 @@ where
     Ctx: Send + Sync + 'static,
     F: Fn() -> Ctx,
 {
+    #[must_use = "the hook will be removed when the handle is dropped"]
     pub unsafe fn hook<T, H>(
         &'scope self,
         target: T,
@@ -102,6 +105,7 @@ where
         unsafe { ScopedHook::hook(self, target, source) }
     }
 
+    #[must_use = "the hook will be removed when the handle is dropped"]
     pub unsafe fn hook_mut<T, H>(
         &'scope self,
         target: T,
@@ -115,6 +119,7 @@ where
         unsafe { ScopedHookMut::hook(self, target, source) }
     }
 
+    #[must_use = "the hook will be removed when the handle is dropped"]
     pub unsafe fn hook_once<T, H>(
         &'scope self,
         target: T,
@@ -134,6 +139,7 @@ where
     T: FnPtr + 'static,
     Ctx: Send + Sync + 'static,
 {
+    #[must_use = "the hook will be removed when the handle is dropped"]
     unsafe fn hook<'env>(
         scope: &'scope Scope<'scope, 'env, Ctx, impl Fn() -> Ctx>,
         target: T,

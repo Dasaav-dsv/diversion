@@ -16,6 +16,7 @@ pub mod installer;
 pub type Result<T> = std::result::Result<T, error::Error>;
 
 #[inline]
+#[must_use]
 pub unsafe fn install<'a, T>(target: T) -> Result<Installer<'a, T>>
 where
     T: FnPtr + 'a,
@@ -24,6 +25,7 @@ where
 }
 
 #[inline]
+#[must_use = "the hook will be removed when the handle is dropped"]
 pub unsafe fn hook<T, H>(target: T, source: impl FnOnce(Weak<T>) -> H) -> Result<Handle<T>>
 where
     T: FnPtr + 'static,
@@ -37,6 +39,7 @@ where
 }
 
 #[inline]
+#[must_use = "the hook will be removed when the handle is dropped"]
 pub unsafe fn hook_mut<T, H>(target: T, source: impl FnOnce(Weak<T>) -> H) -> Result<Handle<T>>
 where
     T: FnPtr + 'static,
@@ -50,6 +53,7 @@ where
 }
 
 #[inline]
+#[must_use = "the hook will be removed when the handle is dropped"]
 pub unsafe fn hook_once<T, H>(target: T, source: impl FnOnce(Weak<T>) -> H) -> Result<Handle<T>>
 where
     T: FnPtr + 'static,

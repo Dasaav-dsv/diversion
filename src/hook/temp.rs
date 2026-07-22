@@ -37,6 +37,7 @@ where
     T: FnPtr,
     Ctx: Send + Sync + 'static,
 {
+    #[must_use = "the hook will be removed when the handle is dropped"]
     unsafe fn hook<H>(self, source: impl FnOnce(Weak<T, Ctx>) -> H) -> Handle<T, Ctx>
     where
         (T::CC, H): FnThunk<T>,
@@ -46,6 +47,7 @@ where
         unsafe { self.hook_unchecked_lt(move |hook| (T::CC::default(), source(hook))) }
     }
 
+    #[must_use = "the hook will be removed when the handle is dropped"]
     unsafe fn hook_mut<H>(self, source: impl FnOnce(Weak<T, Ctx>) -> H) -> Handle<T, Ctx>
     where
         (T::CC, H): FnMutThunk<T>,
@@ -60,6 +62,7 @@ where
         }
     }
 
+    #[must_use = "the hook will be removed when the handle is dropped"]
     unsafe fn hook_once<H>(self, source: impl FnOnce(Weak<T, Ctx>) -> H) -> Handle<T, Ctx>
     where
         (T::CC, H): FnOnceThunk<T>,
