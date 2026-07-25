@@ -46,7 +46,13 @@ impl Protection {
     pub const RWX: Self = Self(PAGE_EXECUTE_READWRITE);
 
     pub fn of<T: ?Sized>(ptr: *const T) -> io::Result<Self> {
-        virtual_query(ptr as *const ()).map(|info| Self(info.Protect))
+        virtual_query(ptr as *const ()).and_then(|info| match info.State {
+            MEM_COMMIT => Ok(Self(info.Protect)),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "tried to get protection of uncommitted memory",
+            )),
+        })
     }
 
     pub unsafe fn protect(self, ptr: *const [u8]) -> io::Result<()> {
@@ -89,14 +95,15 @@ impl Protection {
 
 impl Region {
     pub fn alloc(size: usize, prot: Protection) -> io::Result<Self> {
-        let ptr = unsafe { VirtualAlloc(ptr::null_mut(), size, MEM_COMMIT | MEM_RESERVE, prot.0) };
+        let len = size.next_multiple_of(SysInfo::get().allocation_granularity);
+        let ptr = unsafe { VirtualAlloc(ptr::null_mut(), len, MEM_COMMIT | MEM_RESERVE, prot.0) };
 
         if ptr.is_null() {
             return Err(io::Error::last_os_error());
         }
 
         Ok(Self {
-            ptr: ptr::slice_from_raw_parts_mut(ptr as *mut u8, size),
+            ptr: ptr::slice_from_raw_parts_mut(ptr as *mut u8, len),
             prot: Some(prot),
         })
     }
