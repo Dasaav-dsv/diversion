@@ -5,6 +5,7 @@ pub use diversion_abi::fn_ptr::AtomicFnPtr;
 
 use crate::Result;
 
+mod arch;
 pub mod with;
 
 pub trait HookInstaller: Sized {
@@ -29,7 +30,14 @@ where
     T: FnPtr + 'a,
 {
     pub unsafe fn install(target: T) -> Result<Self> {
-        todo!()
+        cfg_select! {
+            target_arch = "x86_64" => unsafe {
+                arch::x86_64::install(target)
+            }
+            _ => {
+                unimplemented!("this hook installer does not support {}", std::env::consts::ARCH);
+            },
+        }
     }
 }
 

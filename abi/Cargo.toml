@@ -14,7 +14,7 @@ slab = "0.4.12"
 xxhash-rust = { version = "0.8.16", features = ["xxh3"] }
 
 [target.'cfg(unix)'.dependencies]
-libc = "^0.2" # same as atomic-wait
+libc.workspace = true
 
 [features]
 __private-abi = []
