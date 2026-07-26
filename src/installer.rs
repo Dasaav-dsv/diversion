@@ -3,7 +3,7 @@ use std::{fmt, sync::atomic::Ordering};
 use closure_ffi::traits::FnPtr;
 pub use diversion_abi::fn_ptr::AtomicFnPtr;
 
-pub mod arch;
+pub(crate) mod arch;
 pub mod with;
 
 pub trait HookInstaller: Sized {
