@@ -8,7 +8,7 @@ pub mod make;
 pub mod with;
 
 pub trait HookInstaller: Sized {
-    type Target: FnPtr;
+    type Target: FnPtr + 'static;
     type Context: Send + Sync + 'static;
 
     fn target(&self) -> Self::Target;
