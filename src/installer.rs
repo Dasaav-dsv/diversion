@@ -3,9 +3,7 @@ use std::{fmt, sync::atomic::Ordering};
 use closure_ffi::traits::FnPtr;
 pub use diversion_abi::fn_ptr::AtomicFnPtr;
 
-use crate::Result;
-
-mod arch;
+pub mod arch;
 pub mod with;
 
 pub trait HookInstaller: Sized {
@@ -23,22 +21,6 @@ pub trait HookInstaller: Sized {
 pub struct Installer<'a, T> {
     target: T,
     thunk: &'a AtomicFnPtr<T>,
-}
-
-impl<'a, T> Installer<'a, T>
-where
-    T: FnPtr + 'a,
-{
-    pub unsafe fn install(target: T) -> Result<Self> {
-        cfg_select! {
-            target_arch = "x86_64" => unsafe {
-                arch::x86_64::install(target)
-            }
-            _ => {
-                unimplemented!("this hook installer does not support {}", std::env::consts::ARCH);
-            },
-        }
-    }
 }
 
 impl<'a, T> HookInstaller for Installer<'a, T>

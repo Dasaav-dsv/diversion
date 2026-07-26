@@ -22,9 +22,11 @@ diversion-abi = { path = "abi", version = "0.1.0", features = [
 thiserror = "2.0.18"
 
 [target.'cfg(unix)'.dependencies]
-libc.workspace = true
+libc = { workspace = true, optional = true }
 
 [features]
+default = ["installer"]
+installer = ["dep:libc"]
 parking_lot = ["diversion-abi/parking_lot"]
 bare_hrtb = ["closure-ffi/proc_macros"]
 

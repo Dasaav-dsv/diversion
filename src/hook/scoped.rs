@@ -1,3 +1,5 @@
+#![cfg(feature = "installer")]
+
 use std::{
     marker::PhantomData,
     mem::{self, ManuallyDrop},
@@ -42,13 +44,11 @@ pub struct Scope<'scope, 'env: 'scope, Ctx = (), F = fn() -> ()> {
 type ScopedHooks<'scope> = Vec<Arc<Box<dyn Send + Sync + 'scope>>>;
 
 #[inline]
-#[must_use]
 pub fn scope<'env, T>(f: impl for<'scope> FnOnce(&'scope Scope<'scope, 'env>) -> T) -> T {
     scope_with_context(f, || ())
 }
 
 #[inline]
-#[must_use]
 pub fn scope_with_context<'env, T, Ctx, F>(
     f: impl for<'scope> FnOnce(&'scope Scope<'scope, 'env, Ctx, F>) -> T,
     ctx: F,
@@ -139,7 +139,6 @@ where
     T: FnPtr + 'static,
     Ctx: Send + Sync + 'static,
 {
-    #[must_use = "the hook will be removed when the handle is dropped"]
     unsafe fn hook<'env>(
         scope: &'scope Scope<'scope, 'env, Ctx, impl Fn() -> Ctx>,
         target: T,
