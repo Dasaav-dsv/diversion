@@ -80,11 +80,7 @@ unsafe extern "system" {
     ) -> LPVOID;
 
     #[must_use]
-    pub unsafe fn VirtualFree(
-        lpAddress: LPVOID,
-        dwSize: SIZE_T,
-        dwFreeType: DWORD,
-    ) -> BOOL;
+    pub unsafe fn VirtualFree(lpAddress: LPVOID, dwSize: SIZE_T, dwFreeType: DWORD) -> BOOL;
 
     #[must_use]
     pub unsafe fn VirtualQuery(

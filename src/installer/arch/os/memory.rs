@@ -181,6 +181,6 @@ mod tests {
     fn iter() {
         let mut iter = Region::iter(iter as *const ()).unwrap();
         let _first = iter.next().unwrap();
-        while let Some(_) = iter.next() {}
+        while iter.next().is_some() {}
     }
 }
