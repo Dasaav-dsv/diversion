@@ -10,5 +10,5 @@ pub type Result<T> = std::result::Result<T, error::Error>;
 
 #[cfg(feature = "installer")]
 pub use installer::arch::{
-    hook, hook_mut, hook_once, install, static_hook, static_hook_mut, static_hook_once,
+    hook, hook_mut, hook_once, install, scope, static_hook, static_hook_mut, static_hook_once,
 };

@@ -4,18 +4,23 @@ use closure_ffi::traits::{FnMutThunk, FnOnceThunk, FnPtr, FnThunk};
 
 use crate::{
     Result,
-    hook::{Handle, Static, Weak, leak::StaticHook, temp::TemporaryHook},
-    installer::Installer,
+    hook::{
+        Handle, Static, Weak,
+        leak::StaticHook,
+        scoped::{Scope, scope_with_installer},
+        temp::TemporaryHook,
+    },
+    installer::{Installer, MakeInstaller, make::MakeHookInstaller},
 };
 
 mod os;
 mod x86_64;
 
 #[inline]
-#[must_use]
-pub unsafe fn install<'a, T>(target: T) -> Result<Installer<'a, T>>
+#[must_use = "calling install without hooking does not alter program behavior"]
+pub unsafe fn install<T>(target: T) -> Result<Installer<T>>
 where
-    T: FnPtr + 'a,
+    T: FnPtr + 'static,
 {
     unsafe { Installer::install(target) }
 }
@@ -107,18 +112,32 @@ where
     }
 }
 
-impl<'a, T> Installer<'a, T>
+#[inline]
+pub fn scope<'env, T>(f: impl for<'scope> FnOnce(&'scope Scope<'scope, 'env>) -> T) -> T {
+    scope_with_installer(f, MakeInstaller)
+}
+
+impl MakeHookInstaller for MakeInstaller {
+    type Installer<T: FnPtr + 'static> = Installer<T>;
+
+    #[inline]
+    unsafe fn make<T: FnPtr + 'static>(&self, target: T) -> Result<Self::Installer<T>> {
+        unsafe { Installer::install(target) }
+    }
+}
+
+impl<T> Installer<T>
 where
-    T: FnPtr + 'a,
+    T: FnPtr + 'static,
 {
     pub unsafe fn install(target: T) -> Result<Self> {
         cfg_select! {
             target_arch = "x86_64" => unsafe {
                 x86_64::install(target)
             }
-            _ => {
-                unimplemented!("this hook installer does not support {}", std::env::consts::ARCH);
-            },
+            _ => unimplemented!(
+                "this hook installer does not support {}", std::env::consts::ARCH
+            ),
         }
     }
 }

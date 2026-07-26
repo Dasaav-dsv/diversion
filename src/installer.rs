@@ -4,6 +4,7 @@ use closure_ffi::traits::FnPtr;
 pub use diversion_abi::fn_ptr::AtomicFnPtr;
 
 pub(crate) mod arch;
+pub mod make;
 pub mod with;
 
 pub trait HookInstaller: Sized {
@@ -18,14 +19,17 @@ pub trait HookInstaller: Sized {
 }
 
 #[derive(Clone)]
-pub struct Installer<'a, T> {
+pub struct Installer<T: 'static> {
     target: T,
-    thunk: &'a AtomicFnPtr<T>,
+    thunk: &'static AtomicFnPtr<T>,
 }
 
-impl<'a, T> HookInstaller for Installer<'a, T>
+#[derive(Clone, Copy, Default, Debug)]
+pub struct MakeInstaller;
+
+impl<T> HookInstaller for Installer<T>
 where
-    T: FnPtr,
+    T: FnPtr + 'static,
 {
     type Target = T;
     type Context = ();
@@ -44,7 +48,7 @@ where
     fn into_context(self) -> Self::Context {}
 }
 
-impl<T> fmt::Debug for Installer<'_, T>
+impl<T> fmt::Debug for Installer<T>
 where
     T: fmt::Debug,
 {
@@ -68,7 +72,7 @@ pub(crate) mod tests {
 
     pub type ConcatStrFn = unsafe extern "C" fn(String, String) -> String;
 
-    type MockInstaller = Installer<'static, ConcatStrFn>;
+    type MockInstaller = Installer<ConcatStrFn>;
 
     extern "C" fn concat_str(a: String, b: String) -> String {
         format!("{a}{b}")

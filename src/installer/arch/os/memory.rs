@@ -126,7 +126,7 @@ impl Region {
 
 impl Drop for ProtectionGuard {
     fn drop(&mut self) {
-        let _ = Self(self.0.clone()).release();
+        let _ = Self(self.0).release();
     }
 }
 

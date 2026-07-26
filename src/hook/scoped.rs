@@ -1,5 +1,3 @@
-#![cfg(feature = "installer")]
-
 use std::{
     marker::PhantomData,
     mem::{self, ManuallyDrop},
@@ -20,10 +18,10 @@ use diversion_abi::sync::Mutex;
 use crate::{
     Result,
     hook::{Handle, Weak, temp::TemporaryHookExt},
-    installer::{Installer, with::HookInstallerWithContext},
+    installer::{HookInstaller, MakeInstaller, make::MakeHookInstaller},
 };
 
-pub struct Scope<'scope, 'env: 'scope, Ctx = (), F = fn() -> ()> {
+pub struct Scope<'scope, 'env: 'scope, I = MakeInstaller> {
     // Type erased `Arc` pointers to hook closures.
     // This field must be dropped manually, but does not allocate by default.
     scoped_hooks: Mutex<ManuallyDrop<ScopedHooks<'scope>>>,
@@ -35,27 +33,22 @@ pub struct Scope<'scope, 'env: 'scope, Ctx = (), F = fn() -> ()> {
     scope: PhantomData<&'scope mut &'scope ()>,
     env: PhantomData<&'env mut &'env ()>,
 
-    // This injects a 'static context into every hook.
-    ctx: PhantomData<Ctx>,
-    f: F,
+    // GAT installer factory.
+    installer: I,
 }
+
+type Ctx<I, T> = <<I as MakeHookInstaller>::Installer<T> as HookInstaller>::Context;
 
 // The `Arc<Box<dyn Trait>>` nesting makes it possible to call `Arc::into_inner`.
 type ScopedHooks<'scope> = Vec<Arc<Box<dyn Send + Sync + 'scope>>>;
 
 #[inline]
-pub fn scope<'env, T>(f: impl for<'scope> FnOnce(&'scope Scope<'scope, 'env>) -> T) -> T {
-    scope_with_context(f, || ())
-}
-
-#[inline]
-pub fn scope_with_context<'env, T, Ctx, F>(
-    f: impl for<'scope> FnOnce(&'scope Scope<'scope, 'env, Ctx, F>) -> T,
-    ctx: F,
+pub fn scope_with_installer<'env, T, I>(
+    f: impl for<'scope> FnOnce(&'scope Scope<'scope, 'env, I>) -> T,
+    installer: I,
 ) -> T
 where
-    Ctx: Send + Sync + 'static,
-    F: Fn() -> Ctx,
+    I: MakeHookInstaller,
 {
     // `join` is dropped manually to not extend the lifetime of `scope`.
     let scope = Scope {
@@ -63,8 +56,7 @@ where
         main_thread: thread::current(),
         scope: PhantomData,
         env: PhantomData,
-        ctx: PhantomData,
-        f: ctx,
+        installer,
     };
 
     let _guard = DropGuard::new(&scope, |scope| {
@@ -86,17 +78,16 @@ where
     f(&scope)
 }
 
-impl<'scope, 'env, Ctx, F> Scope<'scope, 'env, Ctx, F>
+impl<'scope, 'env, I> Scope<'scope, 'env, I>
 where
-    Ctx: Send + Sync + 'static,
-    F: Fn() -> Ctx,
+    I: MakeHookInstaller,
 {
     #[must_use = "the hook will be removed when the handle is dropped"]
     pub unsafe fn hook<T, H>(
         &'scope self,
         target: T,
-        source: impl FnOnce(Weak<T, Ctx>) -> H,
-    ) -> Result<Handle<T, Ctx>>
+        source: impl FnOnce(Weak<T, Ctx<I, T>>) -> H,
+    ) -> Result<Handle<T, Ctx<I, T>>>
     where
         T: FnPtr + 'static,
         for<'a> (T::CC, &'a H): FnThunk<T>,
@@ -109,12 +100,13 @@ where
     pub unsafe fn hook_mut<T, H>(
         &'scope self,
         target: T,
-        source: impl FnOnce(Weak<T, Ctx>) -> H,
-    ) -> Result<Handle<T, Ctx>>
+        source: impl FnOnce(Weak<T, Ctx<I, T>>) -> H,
+    ) -> Result<Handle<T, Ctx<I, T>>>
     where
         T: FnPtr + 'static,
         for<'a> (T::CC, &'a mut H): FnMutThunk<T>,
         H: Send + 'env,
+        Ctx<I, T>: Send + Sync + 'static,
     {
         unsafe { ScopedHookMut::hook(self, target, source) }
     }
@@ -123,33 +115,35 @@ where
     pub unsafe fn hook_once<T, H>(
         &'scope self,
         target: T,
-        source: impl FnOnce(Weak<T, Ctx>) -> H,
-    ) -> Result<Handle<T, Ctx>>
+        source: impl FnOnce(Weak<T, Ctx<I, T>>) -> H,
+    ) -> Result<Handle<T, Ctx<I, T>>>
     where
         T: FnPtr + 'static,
         (T::CC, H): FnOnceThunk<T>,
         H: Send + 'scope,
+        Ctx<I, T>: Send + Sync + 'static,
     {
         unsafe { ScopedHookOnce::hook(self, target, source) }
     }
 }
 
-trait ScopedStrategy<'scope, H, T, Ctx>: Sized + Send + Sync + 'scope
+trait ScopedStrategy<'scope, H, T, I>: Sized + Send + Sync + 'scope
 where
     T: FnPtr + 'static,
-    Ctx: Send + Sync + 'static,
+    I: MakeHookInstaller,
 {
     unsafe fn hook<'env>(
-        scope: &'scope Scope<'scope, 'env, Ctx, impl Fn() -> Ctx>,
+        scope: &'scope Scope<'scope, 'env, I>,
         target: T,
-        source: impl FnOnce(Weak<T, Ctx>) -> H,
-    ) -> Result<Handle<T, Ctx>> {
+        source: impl FnOnce(Weak<T, Ctx<I, T>>) -> H,
+    ) -> Result<Handle<T, Ctx<I, T>>> {
         // The hook will hold on to this (but that's fine since it's 'static).
         let main_thread = scope.main_thread.clone();
 
         let hook = unsafe {
-            Installer::install(target)?
-                .with_context((scope.f)())
+            scope
+                .installer
+                .make(target)?
                 .hook_unchecked_lt(move |hook| {
                     let hook_fn = Self::new(source(hook.clone()), &hook);
 
@@ -183,7 +177,7 @@ where
         Ok(hook)
     }
 
-    fn new(hook: H, ctx: &Weak<T, Ctx>) -> Self;
+    fn new(hook: H, ctx: &Weak<T, Ctx<I, T>>) -> Self;
 
     unsafe fn call<'a, 'b, 'c>(&self, args: T::Args<'a, 'b, 'c>) -> T::Ret<'a, 'b, 'c>;
 }
@@ -216,14 +210,14 @@ where
     scope: PhantomData<&'scope mut &'scope ()>,
 }
 
-impl<'scope, H, T, Ctx> ScopedStrategy<'scope, H, T, Ctx> for ScopedHook<'scope, H, T, Ctx>
+impl<'scope, H, T, I> ScopedStrategy<'scope, H, T, I> for ScopedHook<'scope, H, T, Ctx<I, T>>
 where
     H: Send + Sync + 'scope,
     T: FnPtr + 'static,
     for<'a> (T::CC, &'a H): FnThunk<T>,
-    Ctx: Send + Sync + 'static,
+    I: MakeHookInstaller,
 {
-    fn new(hook: H, _ctx: &Weak<T, Ctx>) -> Self {
+    fn new(hook: H, _ctx: &Weak<T, Ctx<I, T>>) -> Self {
         Self {
             hook,
             scope: PhantomData,
@@ -237,14 +231,14 @@ where
     }
 }
 
-impl<'scope, H, T, Ctx> ScopedStrategy<'scope, H, T, Ctx> for ScopedHookMut<'scope, H, T, Ctx>
+impl<'scope, H, T, I> ScopedStrategy<'scope, H, T, I> for ScopedHookMut<'scope, H, T, Ctx<I, T>>
 where
     H: Send + 'scope,
     T: FnPtr + 'static,
     for<'a> (T::CC, &'a mut H): FnMutThunk<T>,
-    Ctx: Send + Sync + 'static,
+    I: MakeHookInstaller,
 {
-    fn new(hook: H, _ctx: &Weak<T, Ctx>) -> Self {
+    fn new(hook: H, _ctx: &Weak<T, Ctx<I, T>>) -> Self {
         Self {
             hook: Mutex::new(hook),
             scope: PhantomData,
@@ -258,14 +252,14 @@ where
     }
 }
 
-impl<'scope, H, T, Ctx> ScopedStrategy<'scope, H, T, Ctx> for ScopedHookOnce<'scope, H, T, Ctx>
+impl<'scope, H, T, I> ScopedStrategy<'scope, H, T, I> for ScopedHookOnce<'scope, H, T, Ctx<I, T>>
 where
     H: Send + 'scope,
     T: FnPtr + 'static,
     (T::CC, H): FnOnceThunk<T>,
-    Ctx: Send + Sync + 'static,
+    I: MakeHookInstaller,
 {
-    fn new(hook: H, ctx: &Weak<T, Ctx>) -> Self {
+    fn new(hook: H, ctx: &Weak<T, Ctx<I, T>>) -> Self {
         Self {
             hook: Mutex::new(Some(hook)),
             flag: AtomicBool::new(true),

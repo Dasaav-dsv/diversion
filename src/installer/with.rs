@@ -11,7 +11,7 @@ pub trait HookInstallerWithContext: Sized {
     fn with_context<Ctx>(self, context: Ctx) -> WithContext<Self, Ctx>;
 }
 
-impl<'a, H> HookInstallerWithContext for H
+impl<H> HookInstallerWithContext for H
 where
     H: Deref<Target: HookInstaller>,
 {
