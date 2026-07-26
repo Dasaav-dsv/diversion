@@ -170,8 +170,10 @@ impl Region {
         let alloc_granularity = info.alloc_granularity;
 
         // Rounded allocation bounds that fulfill the requirements.
-        let mut cur_alloc_addr = min_addr & alloc_granularity.wrapping_neg();
+        let min_alloc_addr = min_addr & alloc_granularity.wrapping_neg();
         let max_alloc_addr = (max_addr + size).next_multiple_of(alloc_granularity);
+
+        let mut cur_alloc_addr = min_alloc_addr;
 
         loop {
             let mut iter = Region::iter(ptr::without_provenance(cur_alloc_addr))?;
@@ -185,7 +187,7 @@ impl Region {
                 if region.prot.is_none() {
                     // Free region, check if it's big enough.
                     let addr = region.ptr.addr();
-                    let min = addr.next_multiple_of(alloc_granularity);
+                    let min = addr.next_multiple_of(alloc_granularity).max(min_alloc_addr);
 
                     if min <= max_addr {
                         // If `min < min_addr` the allocation may spill over.
