@@ -1,4 +1,4 @@
-#![cfg(feature = "__private-abi")]
+#![cfg(feature = "__private_abi")]
 
 pub mod context;
 pub mod fn_ptr;

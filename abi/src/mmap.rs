@@ -1,3 +1,5 @@
+#![cfg(feature = "process_ctx")]
+
 use std::{ffi::c_void, io, num::NonZero, process};
 
 use crate::VERSION;

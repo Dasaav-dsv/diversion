@@ -17,7 +17,7 @@ libc = "0.2.189"
 closure-ffi.workspace = true
 closure-ffi-iced-x86 = "1.21.0-commit50066fb" # same as closure-ffi
 diversion-abi = { path = "abi", version = "0.1.0", features = [
-    "__private-abi",
+    "__private_abi",
 ] }
 thiserror = "2.0.18"
 
@@ -26,7 +26,7 @@ libc = { workspace = true, optional = true }
 
 [features]
 default = ["installer"]
-installer = ["dep:libc"]
+installer = ["diversion-abi/process_ctx", "dep:libc"]
 parking_lot = ["diversion-abi/parking_lot"]
 bare_hrtb = ["closure-ffi/proc_macros"]
 

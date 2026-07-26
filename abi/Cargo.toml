@@ -6,16 +6,17 @@ authors = ["Dasaav"]
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-atomic-wait = "1.1.0"
-bump-into = "=0.8.3"
+atomic-wait = { version = "1.1.0", optional = true }
+bump-into = { version = "=0.8.3", optional = true }
 closure-ffi.workspace = true
 parking_lot = { version = "0.12.5", optional = true }
 slab = "0.4.12"
 xxhash-rust = { version = "0.8.16", features = ["xxh3"] }
 
 [target.'cfg(unix)'.dependencies]
-libc.workspace = true
+libc = { workspace = true, optional = true }
 
 [features]
-__private-abi = []
+__private_abi = []
+process_ctx = ["dep:atomic-wait", "dep:bump-into", "dep:libc"]
 parking_lot = ["dep:parking_lot"]

@@ -1,3 +1,5 @@
+#![cfg(feature = "process_ctx")]
+
 use std::{
     hint, mem,
     sync::atomic::{

@@ -1,3 +1,5 @@
+#![cfg(feature = "process_ctx")]
+
 use std::{
     io,
     mem::{ManuallyDrop, MaybeUninit},
