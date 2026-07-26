@@ -9,7 +9,7 @@ use std::{
 
 use libc::{
     _SC_PAGESIZE, MAP_ANONYMOUS, MAP_FAILED, MAP_PRIVATE, PROT_EXEC, PROT_READ, PROT_WRITE,
-    RLIMIT_AS, getrlimit64, mmap, mprotect, munmap, sysconf,
+    RLIM_INFINITY, RLIMIT_AS, getrlimit, mmap, mprotect, munmap, sysconf,
 };
 
 use crate::installer::arch::os::memory::{Protection, ProtectionGuard, Region, SysInfo};
@@ -23,19 +23,29 @@ struct RegionInfo {
 
 impl SysInfo {
     pub fn get() -> Self {
+        // Very likely above what the arch actually supports.
+        // This is the largest possible address supported by Rust due to pointer
+        // subtraction rules.
+        const VA_MAX: usize = isize::MAX as usize;
+
         let page_size = page_size_cached();
 
-        // Can't be a null pointer, must be aligned to `page_size`.
+        // Can't be a null pointer, must be aligned to `page_size`, so use `page_size`.
         let min_address = page_size;
+        let mut max_address_inclusive = VA_MAX - page_size;
 
         // This value may change with calls to `setrlimit/prlimit`.
-        let max_address_inclusive = unsafe {
+        let rlimit_as = unsafe {
             let mut address_space = mem::zeroed();
-            getrlimit64(RLIMIT_AS, &mut address_space);
-            // Assume `isize::MAX <= u64::MAX` and round down to the page size, inclusive.
-            let max64 = address_space.rlim_cur & (page_size as u64).wrapping_neg() - 1;
-            max64.min((isize::MAX as usize - page_size) as u64) as usize
+            getrlimit(RLIMIT_AS, &mut address_space);
+            address_space.rlim_cur
         };
+
+        if rlimit_as != RLIM_INFINITY {
+            // Assume `VA_MAX <= u64::MAX` and round down to the page size, inclusive.
+            let rlimit_as_aligned = rlimit_as & (page_size as u64).wrapping_neg() - 1;
+            max_address_inclusive = rlimit_as_aligned.min(max_address_inclusive as u64) as usize;
+        }
 
         Self::new(page_size, page_size, min_address, max_address_inclusive)
     }
@@ -60,6 +70,8 @@ fn proc_pid_maps() -> io::Result<impl Iterator<Item = io::Result<RegionInfo>>> {
         let next = pos?;
         let map = &maps[next..];
         pos = map.find('\n').map(|index| next + index + 1);
+
+        // Skip trailing newline (empty string).
         (!map.is_empty()).then(|| {
             RegionInfo::from_str(map).ok_or_else(|| {
                 io::Error::new(
@@ -129,8 +141,8 @@ impl Protection {
     }
 
     pub fn try_into_rwx_from_rx(self) -> Option<Self> {
-        let exec = PROT_EXEC as u32;
-        (self.0 & exec != 0).then(|| Self(self.0 | exec))
+        const EXEC: u32 = PROT_EXEC as u32;
+        (self.0 & EXEC != 0).then(|| Self(self.0 | EXEC))
     }
 
     fn from_str(s: &str) -> Self {
@@ -196,6 +208,7 @@ impl Region {
             let max_address = info.max_address_inclusive + 1;
 
             // Could use a `VecDeque` here but `Vec::drain` is simpler.
+            // Skip the vsyscall map above the user virtual address space.
             let mut regions = proc_pid_maps()?
                 .take_while(|region| match region {
                     Ok(region) => region.start < max_address,
@@ -274,6 +287,8 @@ impl Region {
 
 impl RegionInfo {
     fn from_str(mut s: &str) -> Option<Self> {
+        // Expects /proc/<pid>/maps format:
+        // xxxxxxxx-yyyyyyyy rwx- ...
         let start;
         (start, s) = s.split_once('-')?;
         let end;
