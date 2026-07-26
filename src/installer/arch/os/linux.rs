@@ -8,8 +8,8 @@ use std::{
 };
 
 use libc::{
-    _SC_PAGESIZE, MAP_ANONYMOUS, MAP_FAILED, MAP_PRIVATE, PROT_EXEC, PROT_READ, PROT_WRITE,
-    RLIM_INFINITY, RLIMIT_AS, getrlimit, mmap, mprotect, munmap, sysconf,
+    _SC_PAGESIZE, MAP_ANONYMOUS, MAP_FAILED, MAP_FIXED_NOREPLACE, MAP_PRIVATE, PROT_EXEC,
+    PROT_READ, PROT_WRITE, RLIM_INFINITY, RLIMIT_AS, getrlimit, mmap, mprotect, munmap, sysconf,
 };
 
 use crate::installer::arch::os::memory::{Protection, ProtectionGuard, Region, SysInfo};
@@ -32,7 +32,7 @@ impl SysInfo {
 
         // Can't be a null pointer, must be aligned to `page_size`, so use `page_size`.
         let min_address = page_size;
-        let mut max_address_inclusive = VA_MAX - page_size;
+        let mut max_address = VA_MAX - page_size + 1;
 
         // This value may change with calls to `setrlimit/prlimit`.
         let rlimit_as = unsafe {
@@ -43,11 +43,11 @@ impl SysInfo {
 
         if rlimit_as != RLIM_INFINITY {
             // Assume `VA_MAX <= u64::MAX` and round down to the page size, inclusive.
-            let rlimit_as_aligned = rlimit_as & (page_size as u64).wrapping_neg() - 1;
-            max_address_inclusive = rlimit_as_aligned.min(max_address_inclusive as u64) as usize;
+            let rlimit_as_aligned = rlimit_as & (page_size as u64).wrapping_neg();
+            max_address = rlimit_as_aligned.min(max_address as u64) as usize;
         }
 
-        Self::new(page_size, page_size, min_address, max_address_inclusive)
+        Self::new(page_size, page_size, min_address, max_address)
     }
 }
 
@@ -171,18 +171,25 @@ impl Protection {
 
 impl Region {
     pub fn alloc(size: usize, prot: Protection) -> io::Result<Self> {
+        Self::alloc_at(ptr::null(), size, prot)
+    }
+
+    pub fn alloc_at(ptr: *const (), size: usize, prot: Protection) -> io::Result<Self> {
+        let alloc_granularity = page_size_cached();
+
+        if ptr.addr() & (alloc_granularity - 1) != 0 {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+
         let len = size.next_multiple_of(page_size_cached());
 
-        let ptr = unsafe {
-            mmap(
-                ptr::null_mut(),
-                len,
-                prot.0 as c_int,
-                MAP_PRIVATE | MAP_ANONYMOUS,
-                -1,
-                0,
-            )
-        };
+        let mut flags = MAP_PRIVATE | MAP_ANONYMOUS;
+        if !ptr.is_null() {
+            // Ensure mmap atomicity when allocating at a fixed address.
+            flags |= MAP_FIXED_NOREPLACE;
+        }
+
+        let ptr = unsafe { mmap(ptr as *mut c_void, len, prot.0 as c_int, flags, -1, 0) };
 
         if ptr == MAP_FAILED {
             return Err(io::Error::last_os_error());
@@ -201,87 +208,84 @@ impl Region {
         }
     }
 
-    pub fn iter<T: ?Sized>(start: *const T) -> io::Result<impl Iterator<Item = Self>> {
-        fn iter_inner(start: usize) -> io::Result<impl Iterator<Item = Region>> {
-            let info = SysInfo::get();
-            let min_address = info.min_address;
-            let max_address = info.max_address_inclusive + 1;
+    pub fn iter(start: *const ()) -> io::Result<impl Iterator<Item = Self>> {
+        let info = SysInfo::get();
+        let min_address = info.min_address;
+        let max_address = info.max_address;
 
-            // Could use a `VecDeque` here but `Vec::drain` is simpler.
-            // Skip the vsyscall map above the user virtual address space.
-            let mut regions = proc_pid_maps()?
-                .take_while(|region| match region {
-                    Ok(region) => region.start < max_address,
-                    Err(_) => true,
-                })
-                .collect::<io::Result<Vec<_>>>()?;
+        // Could use a `VecDeque` here but `Vec::drain` is simpler.
+        // Skip the vsyscall map above the user virtual address space.
+        let mut regions = proc_pid_maps()?
+            .take_while(|region| match region {
+                Ok(region) => region.start < max_address,
+                Err(_) => true,
+            })
+            .collect::<io::Result<Vec<_>>>()?;
 
-            // Sort in reverse so `Vec::last` and `Vec::pop` point to the start.
-            regions.sort_unstable_by_key(|region| Reverse(region.start));
+        // Sort in reverse so `Vec::last` and `Vec::pop` point to the start.
+        regions.sort_unstable_by_key(|region| Reverse(region.start));
 
-            // Drop regions we aren't interested in (before our `start`).
-            let mut prev_end = min_address;
-            let index = regions.partition_point(|region| {
-                if region.end <= start {
-                    prev_end = region.end;
-                    return false;
+        // Drop regions we aren't interested in (before our `start`).
+        let mut prev_end = min_address;
+        let index = regions.partition_point(|region| {
+            if region.end <= start.addr() {
+                prev_end = region.end;
+                return false;
+            }
+            true
+        });
+
+        let _ = regions.drain(index..);
+
+        // Intersperse with unmapped memory regions.
+        let iter = iter::from_fn(move || match regions.last() {
+            Some(next) => {
+                if prev_end < next.start {
+                    // Insert an unmapped region up to `next.start`.
+                    let ptr = ptr::slice_from_raw_parts_mut(
+                        ptr::with_exposed_provenance_mut(prev_end),
+                        next.start - prev_end,
+                    );
+
+                    prev_end = next.start;
+
+                    Some(Region { ptr, prot: None })
+                } else {
+                    // Return a mapped region.
+                    let ptr = ptr::slice_from_raw_parts_mut(
+                        ptr::with_exposed_provenance_mut(next.start),
+                        next.end - next.start,
+                    );
+
+                    prev_end = next.end;
+
+                    let region = Region {
+                        ptr,
+                        prot: Some(next.prot),
+                    };
+                    let _ = regions.pop();
+
+                    Some(region)
                 }
-                true
-            });
+            }
+            None => {
+                if prev_end < max_address {
+                    // Insert the last unmapped region up to the end of the VA space.
+                    let ptr = ptr::slice_from_raw_parts_mut(
+                        ptr::with_exposed_provenance_mut(prev_end),
+                        max_address - prev_end,
+                    );
 
-            let _ = regions.drain(index..);
+                    prev_end = max_address;
 
-            // Intersperse with unmapped memory regions.
-            let iter = iter::from_fn(move || match regions.last() {
-                Some(next) => {
-                    if prev_end < next.start {
-                        // Insert an unmapped region up to `next.start`.
-                        let ptr = ptr::slice_from_raw_parts_mut(
-                            ptr::with_exposed_provenance_mut(prev_end),
-                            next.start - prev_end,
-                        );
-
-                        prev_end = next.start;
-
-                        Some(Region { ptr, prot: None })
-                    } else {
-                        // Return a mapped region.
-                        let ptr = ptr::slice_from_raw_parts_mut(
-                            ptr::with_exposed_provenance_mut(next.start),
-                            next.end - next.start,
-                        );
-
-                        prev_end = next.end;
-
-                        let region = Region {
-                            ptr,
-                            prot: Some(next.prot),
-                        };
-                        let _ = regions.pop();
-
-                        Some(region)
-                    }
+                    Some(Region { ptr, prot: None })
+                } else {
+                    None
                 }
-                None => {
-                    if prev_end < max_address {
-                        // Insert the last unmapped region up to the end of the VA space.
-                        let ptr = ptr::slice_from_raw_parts_mut(
-                            ptr::with_exposed_provenance_mut(prev_end),
-                            max_address - prev_end,
-                        );
+            }
+        });
 
-                        prev_end = max_address;
-
-                        Some(Region { ptr, prot: None })
-                    } else {
-                        None
-                    }
-                }
-            });
-
-            Ok(iter)
-        }
-        iter_inner(start.addr())
+        Ok(iter)
     }
 }
 

@@ -7,7 +7,7 @@ use std::{io, iter, mem, ptr, sync::LazyLock};
 use crate::installer::arch::os::{
     memory::{Protection, ProtectionGuard, Region, SysInfo},
     windows::ffi::{
-        GetSystemInfo, LPCVOID, LPVOID, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE,
+        GetSystemInfo, LPCVOID, LPVOID, MEM_COMMIT, MEM_FREE, MEM_RELEASE, MEM_RESERVE,
         MEMORY_BASIC_INFORMATION, PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE,
         PAGE_EXECUTE_WRITECOPY, PAGE_GUARD, PAGE_NOCACHE, PAGE_READWRITE, PAGE_WRITECOMBINE,
         VirtualAlloc, VirtualFree, VirtualProtect, VirtualQuery,
@@ -23,7 +23,7 @@ impl SysInfo {
                 info.dwPageSize as usize,
                 info.dwAllocationGranularity as usize,
                 info.lpMinimumApplicationAddress as usize,
-                info.lpMaximumApplicationAddress as usize,
+                info.lpMaximumApplicationAddress as usize + 1,
             )
         });
 
@@ -95,10 +95,30 @@ impl Protection {
 
 impl Region {
     pub fn alloc(size: usize, prot: Protection) -> io::Result<Self> {
-        let len = size.next_multiple_of(SysInfo::get().allocation_granularity);
-        let ptr = unsafe { VirtualAlloc(ptr::null_mut(), len, MEM_COMMIT | MEM_RESERVE, prot.0) };
+        Self::alloc_at(ptr::null(), size, prot)
+    }
+
+    pub fn alloc_at(ptr: *const (), size: usize, prot: Protection) -> io::Result<Self> {
+        let alloc_granularity = SysInfo::get().alloc_granularity;
+
+        if ptr.addr() & (alloc_granularity - 1) != 0 {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+
+        let len = size.next_multiple_of(alloc_granularity);
+
+        // Reserve first, MEM_COMMIT | MEM_RESERVE doesn't fail on already reserved
+        // or already committed pages (a race condition allocating at a fixed address).
+        let ptr = unsafe { VirtualAlloc(ptr as LPVOID, len, MEM_RESERVE, prot.0) };
 
         if ptr.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+
+        // Commit the reserved pages (which were not reserved or committed before).
+        let res = unsafe { VirtualAlloc(ptr, len, MEM_COMMIT, prot.0) };
+
+        if res.is_null() {
             return Err(io::Error::last_os_error());
         }
 
@@ -115,8 +135,8 @@ impl Region {
         }
     }
 
-    pub fn iter<T: ?Sized>(start: *const T) -> io::Result<impl Iterator<Item = Self>> {
-        let info = virtual_query(start as *const ())?;
+    pub fn iter(start: *const ()) -> io::Result<impl Iterator<Item = Self>> {
+        let info = virtual_query(start)?;
         let mut next = info.BaseAddress.wrapping_byte_add(info.RegionSize);
 
         let iter = iter::once(Self::from(info)).chain(iter::from_fn(move || {
@@ -134,7 +154,7 @@ impl From<MEMORY_BASIC_INFORMATION> for Region {
     fn from(info: MEMORY_BASIC_INFORMATION) -> Self {
         Self {
             ptr: ptr::slice_from_raw_parts_mut(info.BaseAddress as *mut u8, info.RegionSize),
-            prot: Some(Protection(info.Protect)),
+            prot: (info.State != MEM_FREE).then_some(Protection(info.Protect)),
         }
     }
 }
