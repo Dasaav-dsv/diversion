@@ -194,15 +194,12 @@ impl Region {
                         let max = (min.max(min_addr) + size).next_multiple_of(alloc_granularity);
 
                         if max <= addr + region.ptr.len() {
-                            match Self::alloc_at(ptr::without_provenance(min), max - min, prot) {
-                                Ok(region) => return Ok(Some(region)),
-                                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                            match Self::alloc_at(ptr::without_provenance(min), max - min, prot)? {
+                                Some(region) => return Ok(Some(region)),
+                                None => {
                                     // Allocation may still be possible within this region.
                                     cur_alloc_addr += alloc_granularity;
                                     break;
-                                }
-                                Err(_) => {
-                                    // Fallthrough, the entire region will be skipped.
                                 }
                             }
                         }
@@ -262,7 +259,7 @@ mod tests {
     #[test]
     fn make_rwx() {
         unsafe {
-            let rx = Region::alloc(4096, Protection::RX).unwrap();
+            let rx = Region::alloc(4096, Protection::RX).unwrap().unwrap();
             Protection::make_rwx(rx.ptr).unwrap();
         }
     }
@@ -270,7 +267,7 @@ mod tests {
     #[test]
     fn alloc_and_free() {
         unsafe {
-            let region = Region::alloc(4096, Protection::RW).unwrap();
+            let region = Region::alloc(4096, Protection::RW).unwrap().unwrap();
             region.free().unwrap();
         }
     }

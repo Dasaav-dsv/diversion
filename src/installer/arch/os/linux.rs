@@ -8,8 +8,9 @@ use std::{
 };
 
 use libc::{
-    _SC_PAGESIZE, MAP_ANONYMOUS, MAP_FAILED, MAP_FIXED_NOREPLACE, MAP_PRIVATE, PROT_EXEC,
-    PROT_READ, PROT_WRITE, RLIM_INFINITY, RLIMIT_AS, getrlimit, mmap, mprotect, munmap, sysconf,
+    _SC_PAGESIZE, EEXIST, ENOMEM, MAP_ANONYMOUS, MAP_FAILED, MAP_FIXED_NOREPLACE, MAP_PRIVATE,
+    PROT_EXEC, PROT_READ, PROT_WRITE, RLIM_INFINITY, RLIMIT_AS, getrlimit, mmap, mprotect, munmap,
+    sysconf,
 };
 
 use crate::installer::arch::os::memory::{Protection, ProtectionGuard, Region, SysInfo};
@@ -185,11 +186,11 @@ impl Protection {
 }
 
 impl Region {
-    pub fn alloc(size: usize, prot: Protection) -> io::Result<Self> {
+    pub fn alloc(size: usize, prot: Protection) -> io::Result<Option<Self>> {
         Self::alloc_at(ptr::null(), size, prot)
     }
 
-    pub fn alloc_at(ptr: *const (), size: usize, prot: Protection) -> io::Result<Self> {
+    pub fn alloc_at(ptr: *const (), size: usize, prot: Protection) -> io::Result<Option<Self>> {
         let alloc_granularity = page_size_cached();
 
         if ptr.addr() & (alloc_granularity - 1) != 0 {
@@ -207,13 +208,17 @@ impl Region {
         let ptr = unsafe { mmap(ptr as *mut c_void, len, prot.0 as c_int, flags, -1, 0) };
 
         if ptr == MAP_FAILED {
-            return Err(io::Error::last_os_error());
+            let err = io::Error::last_os_error();
+            return match err.raw_os_error() {
+                Some(ENOMEM) | Some(EEXIST) => Ok(None),
+                _ => Err(err),
+            };
         }
 
-        Ok(Self {
+        Ok(Some(Self {
             ptr: ptr::slice_from_raw_parts_mut(ptr as *mut u8, len),
             prot: Some(prot),
-        })
+        }))
     }
 
     pub unsafe fn free(self) -> io::Result<()> {

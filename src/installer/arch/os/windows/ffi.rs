@@ -37,6 +37,10 @@ pub const MEM_DECOMMIT: DWORD = 0x00004000;
 pub const MEM_RELEASE: DWORD = 0x00008000;
 pub const MEM_FREE: DWORD = 0x00010000;
 
+pub const ERROR_NOT_ENOUGH_MEMORY: i32 = 8;
+pub const ERROR_INVALID_ADDRESS: i32 = 487;
+pub const ERROR_COMMITMENT_LIMIT: i32 = 1455;
+
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct SYSTEM_INFO {

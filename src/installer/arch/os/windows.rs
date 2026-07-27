@@ -7,10 +7,11 @@ use std::{io, iter, mem, ptr, sync::LazyLock};
 use crate::installer::arch::os::{
     memory::{Protection, ProtectionGuard, Region, SysInfo},
     windows::ffi::{
-        GetSystemInfo, LPCVOID, LPVOID, MEM_COMMIT, MEM_FREE, MEM_RELEASE, MEM_RESERVE,
-        MEMORY_BASIC_INFORMATION, PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE,
-        PAGE_EXECUTE_WRITECOPY, PAGE_GUARD, PAGE_NOCACHE, PAGE_READWRITE, PAGE_WRITECOMBINE,
-        VirtualAlloc, VirtualFree, VirtualProtect, VirtualQuery,
+        ERROR_COMMITMENT_LIMIT, ERROR_INVALID_ADDRESS, ERROR_NOT_ENOUGH_MEMORY, GetSystemInfo,
+        LPCVOID, LPVOID, MEM_COMMIT, MEM_FREE, MEM_RELEASE, MEM_RESERVE, MEMORY_BASIC_INFORMATION,
+        PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY,
+        PAGE_GUARD, PAGE_NOCACHE, PAGE_READWRITE, PAGE_WRITECOMBINE, VirtualAlloc, VirtualFree,
+        VirtualProtect, VirtualQuery,
     },
 };
 
@@ -94,11 +95,11 @@ impl Protection {
 }
 
 impl Region {
-    pub fn alloc(size: usize, prot: Protection) -> io::Result<Self> {
+    pub fn alloc(size: usize, prot: Protection) -> io::Result<Option<Self>> {
         Self::alloc_at(ptr::null(), size, prot)
     }
 
-    pub fn alloc_at(ptr: *const (), size: usize, prot: Protection) -> io::Result<Self> {
+    pub fn alloc_at(ptr: *const (), size: usize, prot: Protection) -> io::Result<Option<Self>> {
         let alloc_granularity = SysInfo::get().alloc_granularity;
 
         if ptr.addr() & (alloc_granularity - 1) != 0 {
@@ -112,20 +113,20 @@ impl Region {
         let ptr = unsafe { VirtualAlloc(ptr as LPVOID, len, MEM_RESERVE, prot.0) };
 
         if ptr.is_null() {
-            return Err(io::Error::last_os_error());
+            return Self::last_os_error_or_alloc_fail();
         }
 
         // Commit the reserved pages (which were not reserved or committed before).
         let res = unsafe { VirtualAlloc(ptr, len, MEM_COMMIT, prot.0) };
 
         if res.is_null() {
-            return Err(io::Error::last_os_error());
+            return Self::last_os_error_or_alloc_fail();
         }
 
-        Ok(Self {
+        Ok(Some(Self {
             ptr: ptr::slice_from_raw_parts_mut(ptr as *mut u8, len),
             prot: Some(prot),
-        })
+        }))
     }
 
     pub unsafe fn free(self) -> io::Result<()> {
@@ -147,6 +148,16 @@ impl Region {
         }));
 
         Ok(iter)
+    }
+
+    fn last_os_error_or_alloc_fail() -> io::Result<Option<Self>> {
+        let err = io::Error::last_os_error();
+        match err.raw_os_error() {
+            Some(ERROR_NOT_ENOUGH_MEMORY)
+            | Some(ERROR_INVALID_ADDRESS)
+            | Some(ERROR_COMMITMENT_LIMIT) => Ok(None),
+            _ => Err(err),
+        }
     }
 }
 
