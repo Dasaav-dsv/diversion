@@ -30,8 +30,7 @@ impl SysInfo {
 
         let page_size = page_size_cached();
 
-        // Can't be a null pointer, must be aligned to `page_size`, so use `page_size`.
-        let min_address = page_size;
+        let min_address = mmap_min_addr();
         let mut max_address = VA_MAX - page_size + 1;
 
         // This value may change with calls to `setrlimit/prlimit`.
@@ -60,6 +59,22 @@ fn page_size_cached() -> usize {
         PAGE_SIZE.store(page_size, Ordering::Release);
     }
     page_size
+}
+
+fn mmap_min_addr() -> usize {
+    // Value recommended by most kernel documentation (fallback).
+    let mut min_addr = 64 * 1024;
+
+    if let Ok(str) = fs::read_to_string("/proc/sys/vm/mmap_min_addr")
+        && let Ok(mmap_min_addr) = str.trim_end().parse::<usize>()
+    {
+        min_addr = mmap_min_addr;
+    }
+
+    let page_size = page_size_cached();
+    
+    // Even when `mmap_min_addr` is 0 don't allow a null address to be used.
+    min_addr.max(page_size).next_multiple_of(page_size)
 }
 
 fn proc_pid_maps() -> io::Result<impl Iterator<Item = io::Result<RegionInfo>>> {
