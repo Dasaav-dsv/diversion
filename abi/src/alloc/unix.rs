@@ -7,11 +7,12 @@ use std::{
 };
 
 use libc::{
-    EEXIST, MAP_FAILED, MAP_SHARED, O_CREAT, O_EXCL, O_RDWR, PROT_READ, PROT_WRITE, close, fstat,
-    ftruncate, mmap, munmap, shm_open, shm_unlink, stat,
+    _SC_PAGESIZE, EEXIST, MAP_ANONYMOUS, MAP_FAILED, MAP_PRIVATE, MAP_SHARED, O_CREAT, O_EXCL,
+    O_RDWR, PROT_EXEC, PROT_READ, PROT_WRITE, close, fstat, ftruncate, mmap, munmap, shm_open,
+    shm_unlink, stat, sysconf,
 };
 
-use crate::mmap::MmapRaw;
+use crate::alloc::{MmapRaw, vec::PodVec};
 
 #[derive(Clone, Debug)]
 pub struct MmapName(String);
@@ -19,6 +20,45 @@ pub struct MmapName(String);
 impl MmapName {
     pub fn new(name: &str) -> Self {
         Self(format!("/{name}\0"))
+    }
+}
+
+impl<T> PodVec<T> {
+    pub(super) fn reserve_one_realloc(&mut self) {
+        let page_size = unsafe { sysconf(_SC_PAGESIZE) as usize };
+        debug_assert!(page_size.is_power_of_two());
+
+        let raw_len = self.raw_len_for_grow(page_size);
+        let raw_ptr = unsafe {
+            mmap(
+                ptr::null_mut(),
+                raw_len,
+                PROT_READ | PROT_WRITE | PROT_EXEC,
+                MAP_PRIVATE | MAP_ANONYMOUS,
+                -1,
+                0,
+            )
+        };
+
+        assert!(
+            raw_ptr != MAP_FAILED,
+            "failed to allocate {raw_len} bytes: {}",
+            io::Error::last_os_error()
+        );
+
+        let (old_ptr, old_len) = unsafe { self.raw_ptr_assign(raw_ptr, raw_len) };
+
+        if old_ptr.is_null() {
+            return;
+        }
+
+        let res = unsafe { munmap(old_ptr, old_len) };
+
+        debug_assert!(
+            res == 0,
+            "failed to free {old_ptr:?}: {}",
+            io::Error::last_os_error()
+        );
     }
 }
 
@@ -135,7 +175,7 @@ pub fn start_time() -> io::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use crate::mmap::unix;
+    use crate::alloc::unix;
 
     #[test]
     fn start_time() {

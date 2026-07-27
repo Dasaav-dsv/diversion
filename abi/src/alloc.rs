@@ -4,6 +4,8 @@ use std::{ffi::c_void, io, num::NonZero, process};
 
 use crate::VERSION;
 
+pub mod vec;
+
 cfg_select! {
     unix => {
         mod unix;
@@ -63,7 +65,7 @@ impl MmapRaw {
 
 #[cfg(test)]
 mod tests {
-    use crate::mmap::MmapBuilder;
+    use crate::alloc::MmapBuilder;
 
     #[test]
     fn open_mmap() {

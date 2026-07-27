@@ -12,8 +12,8 @@ use bump_into::BumpInto;
 
 use crate::{
     Address,
+    alloc::{MmapBuilder, vec::PodVec},
     fn_ptr::AtomicErasedFnPtr,
-    mmap::MmapBuilder,
     sync::pod::{PodMutex, PodMutexGuard},
 };
 
@@ -52,11 +52,11 @@ pub struct ThunkSlot {
 struct ProcessContextInner {
     mutex: PodMutex,
     size: u32,
-    alloc_len: usize,
-    alloc_cap: usize,
+    alloc_cap: u32,
+    thunks: PodVec<ThunkFn>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[repr(C)]
 struct ThunkFn {
     addr: Address,
@@ -78,7 +78,7 @@ impl ProcessContext {
         if inner_ptr.is_null() {
             const MB: u32 = 1024 * 1024;
 
-            let mut size = 16 * MB;
+            let mut size = 8 * MB;
             let mmap_builder = MmapBuilder::new(size)?;
 
             // Check if the process global shared memory needs to be initialized.
@@ -88,25 +88,23 @@ impl ProcessContext {
                 // Below assume the returned memory map is at least `min_size` long.
                 let mut mmap =
                     unsafe { mmap_builder.open(size_of::<ProcessContextInner>() as u32)? };
-                let outer_ptr = mmap.as_mut_ptr().cast::<ProcessContextInner>();
+                let inner_ptr = mmap.as_mut_ptr().cast::<ProcessContextInner>();
 
                 // SAFETY: the zeroed (newly created mmap) bit pattern is valid for this mutex.
                 #[allow(clippy::deref_addrof)]
-                let _guard = unsafe { (*(&raw const (*outer_ptr).mutex)).lock() };
+                let _guard = unsafe { (*(&raw const (*inner_ptr).mutex)).lock() };
 
                 // SAFETY: just locked the mutex, memory access is exclusive.
-                let outer = unsafe { &mut *outer_ptr };
+                let inner = unsafe { &mut *inner_ptr };
 
-                if outer.size == 0 {
+                if inner.size == 0 {
                     // Process global shared memory has *not* been initialized.
-                    outer.size = size;
-                    outer.alloc_len = 0;
-                    outer.alloc_cap =
-                        (size as usize).saturating_sub(size_of::<ProcessContextInner>());
+                    inner.size = size;
+                    inner.alloc_cap = size.saturating_sub(size_of::<ProcessContextInner>() as u32);
                 }
 
                 // Get the actual size since it may have been initialized by another thread.
-                size = outer.size;
+                size = inner.size;
             }
 
             // SAFETY: assume size is valid (and no one else opens this map).
@@ -134,7 +132,7 @@ impl ProcessContext {
         // SAFETY: just locked the mutex, memory access is exclusive.
         // `alloc_cap` is the actual trailing byte length in the map.
         let process = unsafe {
-            let trailing_len = (*inner_ptr).alloc_cap;
+            let trailing_len = (*inner_ptr).alloc_cap as usize;
             let slice = ptr::slice_from_raw_parts_mut(inner_ptr.cast::<()>(), trailing_len);
             &mut *(slice as *mut ProcessContext)
         };
@@ -149,53 +147,32 @@ impl ProcessContext {
     /// has been hooked, or the slot to insert a new thunk at.
     #[inline]
     pub fn get_thunk(&self, addr: Address) -> Result<&'static AtomicErasedFnPtr, ThunkSlot> {
-        let inner = &self.inner;
-
-        // SAFETY: bytes up to `alloc_len` must be valid `ThunkFn` instances.
-        let (_, thunks, _) = unsafe { self.alloc[..inner.alloc_len].align_to::<ThunkFn>() };
-
-        let i = thunks
+        let i = self
+            .inner
+            .thunks
             .binary_search_by_key(&addr, |thunk| thunk.addr)
             .map_err(|index| ThunkSlot { index, addr })?;
 
-        Ok(thunks[i].thunk)
+        Ok(self.inner.thunks[i].thunk)
     }
 
     /// Inserts a new atomic pointer at a thunk slot returned by [`Self::get_thunk`].
     #[inline]
     #[track_caller]
-    pub fn insert_thunk(
-        &mut self,
-        slot: ThunkSlot,
-        thunk: &'static AtomicErasedFnPtr,
-    ) -> Result<(), ThunkSlot> {
-        let inner = &mut self.inner;
-        let len = inner.alloc_len / size_of::<ThunkFn>();
-
-        if slot.index > len || inner.alloc_len + size_of::<ThunkFn>() > inner.alloc_cap {
-            return Err(slot);
-        }
-
-        inner.alloc_len += size_of::<ThunkFn>();
-
-        // SAFETY: reinterpreting `MaybeUninit<u8>` as (aligned) `MaybeUninit<ThunkFn>`.
-        let (_, slice, _) = unsafe { self.alloc.align_to_mut::<MaybeUninit<ThunkFn>>() };
-
-        slice.copy_within(slot.index..len, slot.index + 1);
-
-        slice[slot.index] = MaybeUninit::new(ThunkFn {
-            addr: slot.addr,
-            thunk,
-        });
-
-        Ok(())
+    pub fn insert_thunk(&mut self, slot: ThunkSlot, thunk: &'static AtomicErasedFnPtr) {
+        self.inner.thunks.insert(
+            slot.index,
+            ThunkFn {
+                addr: slot.addr,
+                thunk,
+            },
+        );
     }
 
     /// Creates a bump allocator that borrows the memory allocated by the context.
     #[inline]
     pub fn bump_into(&mut self) -> BumpInto<'_> {
-        let free = &mut self.alloc[self.inner.alloc_len..];
-        BumpInto::from_slice(free)
+        BumpInto::from_slice(&mut self.alloc)
     }
 }
 

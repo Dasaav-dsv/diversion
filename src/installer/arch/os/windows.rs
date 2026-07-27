@@ -34,7 +34,7 @@ impl SysInfo {
 
 fn virtual_query(ptr: *const ()) -> io::Result<MEMORY_BASIC_INFORMATION> {
     let mut info = Default::default();
-    let size = mem::size_of::<MEMORY_BASIC_INFORMATION>();
+    let size = size_of::<MEMORY_BASIC_INFORMATION>();
     match unsafe { VirtualQuery(ptr as LPCVOID, &mut info, size) } {
         0 => Err(io::Error::last_os_error()),
         _ => Ok(info),

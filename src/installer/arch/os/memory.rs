@@ -227,7 +227,7 @@ impl Drop for ProtectionGuard {
 
 #[cfg(test)]
 mod tests {
-    use core::slice;
+    use std::slice;
 
     use crate::installer::arch::os::memory::{Protection, Region, SysInfo};
 

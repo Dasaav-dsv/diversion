@@ -1,9 +1,9 @@
 #![cfg(feature = "__private_abi")]
 
+mod alloc;
 pub mod context;
 pub mod fn_ptr;
 pub mod linked_slab;
-mod mmap;
 pub mod sync;
 
 /// A memory address without provenance (`usize` alias).
