@@ -194,19 +194,22 @@ impl Region {
                         let max = (min.max(min_addr) + size).next_multiple_of(alloc_granularity);
 
                         if max <= addr + region.ptr.len() {
-                            if let Ok(region) =
-                                Self::alloc_at(ptr::without_provenance(min), max - min, prot)
-                            {
-                                return Ok(Some(region));
+                            match Self::alloc_at(ptr::without_provenance(min), max - min, prot) {
+                                Ok(region) => return Ok(Some(region)),
+                                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                                    // Allocation may still be possible within this region.
+                                    cur_alloc_addr += alloc_granularity;
+                                    break;
+                                }
+                                Err(_) => {
+                                    // Fallthrough, the entire region will be skipped.
+                                }
                             }
-
-                            // Allocation failed, restart at last good `min_alloc_addr`.
-                            break;
                         }
                     }
                 }
 
-                // Remember this region is occupied.
+                // Remember this region is unavailable.
                 cur_alloc_addr =
                     (region.ptr.addr() + region.ptr.len()).next_multiple_of(info.alloc_granularity);
 

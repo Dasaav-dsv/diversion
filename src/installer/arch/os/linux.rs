@@ -72,7 +72,7 @@ fn mmap_min_addr() -> usize {
     }
 
     let page_size = page_size_cached();
-    
+
     // Even when `mmap_min_addr` is 0 don't allow a null address to be used.
     min_addr.max(page_size).next_multiple_of(page_size)
 }
