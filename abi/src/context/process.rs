@@ -189,6 +189,8 @@ impl ProcessContext {
 }
 
 impl BoundedRangeAllocator {
+    const MIN_RANGE_LEN: usize = size_of::<usize>();
+
     /// Takes ownership of a range of bytes, making them available for allocation.
     ///
     /// Note that the mutable borrow is perpetual.
@@ -197,6 +199,7 @@ impl BoundedRangeAllocator {
             return;
         }
 
+        let range_len = range.len();
         let range = range.as_mut_ptr_range();
 
         if self.min_addr > range.start.addr() {
@@ -225,8 +228,10 @@ impl BoundedRangeAllocator {
             return;
         }
 
-        // Adopt detached range.
-        self.ranges.insert(index, [range.start, range.end]);
+        // Adopt detached range if it's big enough (to avoid fragmentation).
+        if range_len >= Self::MIN_RANGE_LEN {
+            self.ranges.insert(index, [range.start, range.end]);
+        }
     }
 
     /// Interprets a value as a range of bytes and calls [`Self::adopt_range`].
@@ -352,7 +357,7 @@ impl BoundedRangeAllocator {
             return None;
         }
 
-        // Can allocate from the start without splitting the region in two.
+        // Can allocate from the start without splitting the range in two.
         unsafe fn alloc_from_start<T>(start: &mut *mut MaybeUninit<u8>) -> &'static mut T {
             unsafe {
                 let ptr = start.cast::<T>();
@@ -361,7 +366,7 @@ impl BoundedRangeAllocator {
             }
         }
 
-        // Can allocate from the end without splitting the region in two.
+        // Can allocate from the end without splitting the range in two.
         unsafe fn alloc_from_end<T>(end: &mut *mut MaybeUninit<u8>) -> &'static mut T {
             unsafe {
                 let new_end = end.byte_sub(size_of::<T>());
@@ -371,12 +376,12 @@ impl BoundedRangeAllocator {
             }
         }
 
-        // From the first region that ends after `min_addr`...
+        // From the first range that ends after `min_addr`...
         let index = self
             .ranges
             .partition_point(|[_, end]| end.addr() <= min_addr);
 
-        // ...up to and excluding the region that begins after `max_addr`.
+        // ...up to and excluding the range that begins after `max_addr`.
         let iter = self
             .ranges
             .iter_mut()
@@ -384,7 +389,7 @@ impl BoundedRangeAllocator {
             .skip(index)
             .take_while(|(_, [start, _])| start.addr() < max_addr);
 
-        // Probe available regions starting from the lowest.
+        // Probe available ranges starting from the lowest.
         for (index, [start, end]) in iter {
             // Lowest possible address that fits the alignment requirements of T.
             let min = start
@@ -397,12 +402,12 @@ impl BoundedRangeAllocator {
                 & align_of::<T>().wrapping_neg();
 
             if min > max {
-                // Region is too small.
+                // Range is too small.
                 continue;
             }
 
             // Prefer allocating unaligned values from the start and aligned from the end.
-            // When the start or the end are equal to one of the bounds, splitting the region
+            // When the start or the end are equal to one of the bounds, splitting the range
             // can be avoided.
             if const { align_of::<T>() == 1 } {
                 if start.addr() == min {
@@ -424,17 +429,17 @@ impl BoundedRangeAllocator {
             let new_start = *start;
             let new_len = min - new_start.addr();
 
-            // Split into three regions:
+            // Split into three ranges:
             // [start, min) ... [min, min + size_of::<T>()) ... [min + size_of::<T>(), end)
             let new_end = unsafe { new_start.add(new_len) };
 
-            // Set this region to be the [min + size_of::<T>(), end) one.
+            // Set this range to be the [min + size_of::<T>(), end) one.
             *start = unsafe { new_end.add(size_of::<T>()) };
 
             // Skipping this step when `new_len` is small forgets some bytes,
-            // but avoids inserting a tiny region. That memory will never be reclaimed.
-            if new_len >= size_of::<usize>() {
-                // Insert [start, min) before this region.
+            // but avoids inserting a tiny range. That memory will never be reclaimed.
+            if new_len >= Self::MIN_RANGE_LEN {
+                // Insert [start, min) before this range.
                 self.ranges.insert(index, [new_start, new_end]);
             }
 
