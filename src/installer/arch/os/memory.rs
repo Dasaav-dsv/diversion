@@ -130,10 +130,6 @@ impl Region {
         // Highest possible address accounting for allocation size.
         let max_addr = addr.saturating_sub(min).min(addr.saturating_sub(size));
 
-        if min_addr > max_addr {
-            return Ok(None);
-        }
-
         Self::alloc_between(min_addr, max_addr, size, prot, info)
     }
 
@@ -153,10 +149,6 @@ impl Region {
             .saturating_add(max)
             .min(info.max_address.saturating_sub(size));
 
-        if min_addr > max_addr {
-            return Ok(None);
-        }
-
         Self::alloc_between(min_addr, max_addr, size, prot, info)
     }
 
@@ -167,6 +159,10 @@ impl Region {
         prot: Protection,
         info: &SysInfo,
     ) -> io::Result<Option<Self>> {
+        if min_addr > max_addr {
+            return Ok(None);
+        }
+
         let alloc_granularity = info.alloc_granularity;
 
         // Rounded allocation bounds that fulfill the requirements.
