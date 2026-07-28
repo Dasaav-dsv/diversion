@@ -9,6 +9,7 @@ use std::{
 };
 
 use bump_into::BumpInto;
+use closure_ffi::traits::Any;
 
 use crate::{
     Address,
@@ -249,52 +250,105 @@ impl BoundedRangeAllocator {
     }
 
     /// Attempts to allocate a `MaybeUninit<T>` value within a given distance
-    /// from the provided `near` address.
+    /// near the provided address.
     ///
     /// Memory is sourced from one of ranges previously adopted with [`Self::adopt_range`],
-    /// it might be necessary to adopt a new range that satisfies `near` and `minmax_dist`
+    /// it might be necessary to adopt a new range that satisfies `ptr` and `dist`
     /// for this function to succeed.
-    pub fn alloc<T>(
+    pub fn alloc_near<T>(
         &mut self,
-        near: *const (),
-        minmax_dist: impl RangeBounds<usize>,
+        ptr: *const (impl Any + ?Sized),
+        dist: impl RangeBounds<isize>,
     ) -> Option<&'static mut MaybeUninit<T>> {
-        let min = match minmax_dist.start_bound() {
-            Bound::Excluded(&usize::MAX) => return None,
-            Bound::Excluded(min) => min + 1,
-            Bound::Included(min) => *min,
-            Bound::Unbounded => 0,
-        };
-
-        let max = match minmax_dist.end_bound() {
-            Bound::Excluded(&0) => return None,
-            Bound::Excluded(max) => max - 1,
-            Bound::Included(max) => *max,
-            Bound::Unbounded => usize::MAX,
-        };
-
         // SAFETY: MaybeUninit<T> is always valid for any byte representation.
-        unsafe { self.alloc_raw(near.addr(), min, max) }
+        unsafe {
+            self.alloc_inside_bounds(
+                ptr.addr(),
+                dist.start_bound().cloned(),
+                dist.end_bound().cloned(),
+            )
+        }
+    }
+
+    /// Attempts to allocate a `MaybeUninit<T>` value within a given distance
+    /// away from the provided address.
+    ///
+    /// Memory is sourced from one of ranges previously adopted with [`Self::adopt_range`],
+    /// it might be necessary to adopt a new range that satisfies `ptr` and `dist`
+    /// for this function to succeed.
+    pub fn alloc_away<T>(
+        &mut self,
+        ptr: *const (impl Any + ?Sized),
+        dist: impl RangeBounds<isize>,
+    ) -> Option<&'static mut MaybeUninit<T>> {
+        // SAFETY: MaybeUninit<T> is always valid for any byte representation.
+        unsafe {
+            self.alloc_outside_bounds(
+                ptr.addr(),
+                dist.start_bound().cloned(),
+                dist.end_bound().cloned(),
+            )
+        }
     }
 
     /// # Safety
     ///
     /// T must be valid for any byte representation (like MaybeUninit<T>).
-    unsafe fn alloc_raw<T>(
+    unsafe fn alloc_inside_bounds<T>(
         &mut self,
         addr: usize,
-        min: usize,
-        max: usize,
+        start: Bound<isize>,
+        end: Bound<isize>,
     ) -> Option<&'static mut T> {
-        if max.checked_sub(min)? < size_of::<T>() {
-            return None;
-        }
+        let min = match start {
+            Bound::Excluded(isize::MAX) => return None,
+            Bound::Excluded(min) => min + 1,
+            Bound::Included(min) => min,
+            Bound::Unbounded => isize::MIN,
+        };
 
-        if let Some(value) = unsafe { self.alloc_raw_below(addr, min, max) } {
+        let max = match end {
+            Bound::Excluded(isize::MIN) => return None,
+            Bound::Excluded(max) => max - 1,
+            Bound::Included(max) => max,
+            Bound::Unbounded => isize::MAX,
+        };
+
+        unsafe { self.alloc_in_range(addr, min, max) }
+    }
+
+    /// # Safety
+    ///
+    /// T must be valid for any byte representation (like MaybeUninit<T>).
+    unsafe fn alloc_outside_bounds<T>(
+        &mut self,
+        addr: usize,
+        start: Bound<isize>,
+        end: Bound<isize>,
+    ) -> Option<&'static mut T> {
+        let min = match start {
+            Bound::Included(isize::MIN) => return None,
+            Bound::Included(min) => min - 1,
+            Bound::Excluded(min) => min,
+            Bound::Unbounded => isize::MIN,
+        };
+
+        let max = match end {
+            Bound::Included(isize::MAX) => return None,
+            Bound::Included(max) => max + 1,
+            Bound::Excluded(max) => max,
+            Bound::Unbounded => isize::MAX,
+        };
+
+        if min != isize::MIN
+            && let Some(value) = unsafe { self.alloc_in_range(addr, isize::MIN, min) }
+        {
             return Some(value);
         }
 
-        if let Some(value) = unsafe { self.alloc_raw_above(addr, min, max) } {
+        if max != isize::MAX
+            && let Some(value) = unsafe { self.alloc_in_range(addr, max, isize::MAX) }
+        {
             return Some(value);
         }
 
@@ -304,47 +358,27 @@ impl BoundedRangeAllocator {
     /// # Safety
     ///
     /// T must be valid for any byte representation (like MaybeUninit<T>).
-    unsafe fn alloc_raw_below<T>(
+    unsafe fn alloc_in_range<T>(
         &mut self,
         addr: usize,
-        min: usize,
-        max: usize,
+        min: isize,
+        max: isize,
     ) -> Option<&'static mut T> {
         // Lowest possible (requested) address.
-        let min_addr = addr.saturating_sub(max).max(self.min_addr);
+        let min_addr = addr.saturating_add_signed(min);
 
         // Highest possible address accounting for allocation size.
         let max_addr = addr
-            .saturating_sub(min)
-            .min(addr.saturating_sub(size_of::<T>()));
-
-        unsafe { self.alloc_raw_between(min_addr, max_addr) }
-    }
-
-    /// # Safety
-    ///
-    /// T must be valid for any byte representation (like MaybeUninit<T>).
-    unsafe fn alloc_raw_above<T>(
-        &mut self,
-        addr: usize,
-        min: usize,
-        max: usize,
-    ) -> Option<&'static mut T> {
-        // Lowest possible (requested) address.
-        let min_addr = addr.saturating_add(min);
-
-        // Highest possible address accounting for allocation size.
-        let max_addr = addr
-            .saturating_add(max)
+            .saturating_add_signed(max)
             .min(self.max_addr.saturating_sub(size_of::<T>()));
 
-        unsafe { self.alloc_raw_between(min_addr, max_addr) }
+        unsafe { self.alloc_between(min_addr, max_addr) }
     }
 
     /// # Safety
     ///
     /// T must be valid for any byte representation (like MaybeUninit<T>).
-    unsafe fn alloc_raw_between<T>(
+    unsafe fn alloc_between<T>(
         &mut self,
         min_addr: usize,
         max_addr: usize,
@@ -488,13 +522,13 @@ mod tests {
         struct AlignedUninit([MaybeUninit<u8>; 4096]);
         static mut UNINIT: AlignedUninit = AlignedUninit([MaybeUninit::uninit(); _]);
 
-        const TWO_GB: usize = 2 * 1024 * 1024 * 1024;
+        const TWO_GB: isize = 2 * 1024 * 1024 * 1024;
 
         let mut context = ProcessContext::acquire().unwrap();
         let alloc = context.bounded_range_alloc();
 
         let near_ptr = range_alloc as *const ();
-        let should_fail = alloc.alloc::<u8>(near_ptr, ..TWO_GB);
+        let should_fail = alloc.alloc_near::<u8>(near_ptr, -TWO_GB..TWO_GB);
 
         assert_matches!(should_fail, None);
 
@@ -503,13 +537,16 @@ mod tests {
         #[allow(static_mut_refs)]
         alloc.adopt_range(unsafe { &mut UNINIT.0 });
 
-        let a = alloc.alloc::<u8>(near_ptr, ..TWO_GB).unwrap();
-        let b = alloc.alloc::<i32>(near_ptr, ..TWO_GB).unwrap();
+        let a = alloc.alloc_near::<u8>(near_ptr, -TWO_GB..TWO_GB).unwrap();
+        let b = alloc.alloc_near::<i32>(near_ptr, -TWO_GB..TWO_GB).unwrap();
 
         alloc.reclaim(a);
         alloc.reclaim(b);
 
-        let c = alloc.alloc::<usize>(near_ptr, ..TWO_GB).unwrap();
+        let c = alloc
+            .alloc_near::<usize>(near_ptr, -TWO_GB..TWO_GB)
+            .unwrap();
+
         alloc.reclaim(c);
     }
 }
