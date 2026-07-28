@@ -87,16 +87,15 @@ impl ProcessContext {
         if inner_ptr.is_null() {
             const MB: u32 = 1024 * 1024;
 
-            let mut size = 8 * MB;
+            let mut size = 16 * MB;
             let mmap_builder = MmapBuilder::new(size)?;
 
             // Check if the process global shared memory needs to be initialized.
-            // Keep the drop order in mind: first `outer`, then `_guard`, and lastly `mmap`.
+            // Keep the drop order in mind: first `_guard` and then `mmap`.
             {
                 // SAFETY: as long as no one other than `diversion` code opens this map.
-                // Below assume the returned memory map is at least `min_size` long.
-                let mut mmap =
-                    unsafe { mmap_builder.open(size_of::<ProcessContextInner>() as u32)? };
+                // Below assume the returned memory map is at least `size` long.
+                let mut mmap = unsafe { mmap_builder.open(size)? };
                 let inner_ptr = mmap.as_mut_ptr().cast::<ProcessContextInner>();
 
                 // SAFETY: the zeroed (newly created mmap) bit pattern is valid for this mutex.
