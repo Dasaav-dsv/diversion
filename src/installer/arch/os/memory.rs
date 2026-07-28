@@ -52,7 +52,7 @@ impl SysInfo {
 }
 
 impl ProtectionGuard {
-    fn release(self) -> io::Result<()> {
+    pub fn restore(self) -> io::Result<()> {
         let guard = ManuallyDrop::new(self);
         match guard.0.prot {
             Some(prot) => unsafe { prot.protect(guard.0.ptr) },
@@ -217,7 +217,7 @@ impl Region {
 
 impl Drop for ProtectionGuard {
     fn drop(&mut self) {
-        let _ = Self(self.0).release();
+        let _ = Self(self.0).restore();
     }
 }
 

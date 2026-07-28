@@ -13,6 +13,7 @@ use crate::{
     installer::{Installer, MakeInstaller, make::MakeHookInstaller},
 };
 
+mod atomic;
 mod os;
 mod x86_64;
 
