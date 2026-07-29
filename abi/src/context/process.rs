@@ -360,7 +360,10 @@ impl BoundedRangeAllocator {
                 .next_multiple_of(align_of::<T>());
 
             // Highest possible address that fits the size and alignment requirements of T.
-            let max = end.expose_provenance().saturating_sub(size_of::<T>())
+            let max = end
+                .expose_provenance()
+                .saturating_sub(size_of::<T>())
+                .min(max_addr)
                 & align_of::<T>().wrapping_neg();
 
             if min > max {

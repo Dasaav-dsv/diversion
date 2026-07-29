@@ -156,10 +156,10 @@ where
     let first_len = prologue.insns[0].len();
 
     assert!(first_len > 0 && first_len < 16);
-    for i in 0..JMP_INSN_LEN.saturating_sub(first_len) {
-        let byte = prologue.bytes[first_len + i];
-        min_disp32_bytes[i] = byte;
-        max_disp32_bytes[i] = byte;
+    for i in first_len..JMP_INSN_LEN {
+        let byte = prologue.bytes[i];
+        min_disp32_bytes[i - 1] = byte;
+        max_disp32_bytes[i - 1] = byte;
     }
 
     let min = i32::from_le_bytes(min_disp32_bytes) as isize;
