@@ -192,7 +192,7 @@ where
         }
     };
 
-    let (trampoline, trampoline_bytes) = match prologue.relocate(target, alloc, 1) {
+    let (trampoline, trampoline_bytes) = match prologue.relocate(target, alloc) {
         Ok(trampoline) => trampoline,
         Err(e) => {
             alloc.reclaim(thunk);
@@ -295,7 +295,6 @@ impl<'a> Prologue<'a> {
         &self,
         target: T,
         alloc: &mut BoundedRangeAllocator,
-        insn_count: usize,
     ) -> Result<(T, &'static mut [u8])>
     where
         T: FnPtr + 'static,
@@ -311,7 +310,7 @@ impl<'a> Prologue<'a> {
             .ok_or_else(|| E::oom(target.to_ptr().addr()))?
             .as_mut();
 
-        let insn_count = insn_count.max(self.insn_count as usize);
+        let insn_count = self.insn_count as usize;
         let mut insns = self.insns[..insn_count].to_vec();
 
         if let insn = insns.last().unwrap()
