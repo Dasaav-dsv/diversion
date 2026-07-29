@@ -82,8 +82,14 @@ where
     }
 
     #[inline]
-    pub fn erased(self) -> AtomicErasedFnPtr {
+    pub fn erase(self) -> AtomicErasedFnPtr {
         AtomicErasedFnPtr(self.ptr)
+    }
+
+    #[inline]
+    pub fn as_erased(&self) -> &AtomicErasedFnPtr {
+        // SAFETY: transmuting between two valid `repr(transparent)` wrappers.
+        unsafe { mem::transmute::<&Self, &AtomicErasedFnPtr>(self) }
     }
 }
 

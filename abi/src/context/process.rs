@@ -9,12 +9,12 @@ use std::{
 };
 
 use bump_into::BumpInto;
-use closure_ffi::traits::Any;
+use closure_ffi::traits::{Any, FnPtr};
 
 use crate::{
     Address,
     alloc::{MmapBuilder, vec::PodVec},
-    fn_ptr::AtomicErasedFnPtr,
+    fn_ptr::{AtomicErasedFnPtr, AtomicFnPtr},
     sync::pod::{PodMutex, PodMutexGuard},
 };
 
@@ -50,9 +50,9 @@ pub struct BoundedRangeAllocator {
 
 /// Empty slot corresponding to an address passed to [`ProcessContext::get_thunk`].
 #[derive(Debug)]
-pub struct ThunkSlot {
+pub struct ThunkSlot<F> {
     index: usize,
-    addr: Address,
+    target: F,
 }
 
 /// N.B. this struct is a POD type.
@@ -152,25 +152,34 @@ impl ProcessContext {
     /// Gets an atomic pointer to the thunk pointer if the function at this address
     /// has been hooked, or the slot to insert a new thunk at.
     #[inline]
-    pub fn get_thunk(&self, addr: Address) -> Result<&'static AtomicErasedFnPtr, ThunkSlot> {
+    pub fn get_thunk<F>(&self, target: F) -> Result<&'static AtomicFnPtr<F>, ThunkSlot<F>>
+    where
+        F: FnPtr + 'static,
+    {
         let i = self
             .inner
             .thunks
-            .binary_search_by_key(&addr, |thunk| thunk.addr)
-            .map_err(|index| ThunkSlot { index, addr })?;
+            .binary_search_by_key(&target.to_ptr().addr(), |thunk| thunk.addr)
+            .map_err(|index| ThunkSlot { index, target })?;
 
-        Ok(self.inner.thunks[i].thunk)
+        // SAFETY: F is a valid function pointer, so the function at this address is F.
+        let thunk = unsafe { self.inner.thunks[i].thunk.downcast() };
+
+        Ok(thunk)
     }
 
     /// Inserts a new atomic pointer at a thunk slot returned by [`Self::get_thunk`].
     #[inline]
     #[track_caller]
-    pub fn insert_thunk(&mut self, slot: ThunkSlot, thunk: &'static AtomicErasedFnPtr) {
+    pub fn insert_thunk<F>(&mut self, slot: ThunkSlot<F>, thunk: &'static AtomicFnPtr<F>)
+    where
+        F: FnPtr + 'static,
+    {
         self.inner.thunks.insert(
             slot.index,
             ThunkFn {
-                addr: slot.addr,
-                thunk,
+                addr: slot.target.to_ptr().addr(),
+                thunk: thunk.as_erased(),
             },
         );
     }

@@ -82,6 +82,12 @@ where
     // from all other threads.
     let mut context = ProcessContext::acquire().map_err(E::ProcessContext)?;
 
+    // Check if a thunk was already installed here or get the slot to insert it at.
+    let slot = match context.get_thunk(target) {
+        Ok(thunk) => return Ok(Installer { target, thunk }),
+        Err(slot) => slot,
+    };
+
     loop {
         // Access the first 19 bytes of the function. Note the function may be shorter,
         // but its length is not possible to know before decoding its instructions.
@@ -131,6 +137,10 @@ where
                 Err(InstallError::Error(e)) => return Err(e),
             },
         };
+
+        // Globally register this target as already hooked.
+        // All future calls to `install` with this target will return this thunk.
+        context.insert_thunk(slot, installer.thunk);
 
         debug_assert_matches!(
             prot_guard.restore(),

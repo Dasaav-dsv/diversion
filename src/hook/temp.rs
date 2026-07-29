@@ -163,7 +163,7 @@ where
                 thunk
             });
 
-            AtomicFnPtr::new(original).erased()
+            AtomicFnPtr::new(original).erase()
         });
 
         // SAFETY: we know the exact function type `.closures` promises to return.
