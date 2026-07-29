@@ -14,7 +14,7 @@ use closure_ffi_iced_x86::{
     InstructionBlock,
 };
 use diversion_abi::{
-    context::process::{BoundedRangeAllocator, ProcessContext, ProcessContextGuard},
+    context::process::{BoundedRangeAllocator, ProcessContext},
     fn_ptr::AtomicFnPtr,
 };
 
@@ -58,17 +58,27 @@ struct Prologue<'a> {
     max_rel_addr: usize,
 }
 
+struct JmpChain<'a, T: 'static> {
+    alloc: &'a mut BoundedRangeAllocator,
+    thunk: &'static mut AtomicFnPtr<T>,
+    jmp_abs: &'static mut JmpAbs,
+    jmp_rel: JmpRel,
+    trampoline_bytes: &'static mut [u8],
+}
+
 enum InstallError {
     Error(E),
     TryAgain,
 }
 
+#[derive(Clone)]
 #[repr(C, packed(1))]
 struct JmpRel {
     opcode: u8,
     disp: i32,
 }
 
+#[derive(Clone)]
 #[repr(C, packed(1))]
 struct JmpAbs {
     opcode: u8,
@@ -123,8 +133,10 @@ where
             });
         }
 
+        let alloc = context.bounded_range_alloc();
+
         // SAFETY: upheld by caller.
-        let installer = match unsafe { install_fast(target, &mut context, &prologue) } {
+        let installer = match unsafe { install_fast(target, alloc, &prologue) } {
             Ok(installer) => installer,
             Err(InstallError::TryAgain) => continue,
             Err(InstallError::Error(e)) => return Err(e),
@@ -133,7 +145,7 @@ where
         // SAFETY: upheld by caller.
         let installer = match installer {
             Some(installer) => installer,
-            None => match unsafe { install_slow(target, &mut context, &prologue) } {
+            None => match unsafe { install_slow(target, alloc, &prologue) } {
                 Ok(installer) => installer,
                 Err(InstallError::TryAgain) => continue,
                 Err(InstallError::Error(e)) => return Err(e),
@@ -156,7 +168,7 @@ where
 
 unsafe fn install_fast<T>(
     target: T,
-    context: &mut ProcessContextGuard,
+    alloc: &mut BoundedRangeAllocator,
     prologue: &Prologue,
 ) -> ::std::result::Result<Option<Installer<T>>, InstallError>
 where
@@ -177,63 +189,108 @@ where
     let min = i32::from_le_bytes(min_disp32_bytes) as isize;
     let max = i32::from_le_bytes(max_disp32_bytes) as isize;
 
-    let alloc = context.bounded_range_alloc();
-
-    let jmp_rel_ptr = target.to_ptr().wrapping_byte_add(JMP_INSN_LEN);
-    let Some(jmp_abs) = alloc.os_alloc_near::<JmpAbs>(jmp_rel_ptr, min..max)? else {
+    let Some(jmp_chain) = JmpChain::build(target, alloc, prologue, min..max)? else {
         if first_len < JMP_INSN_LEN {
             // If the first instruction couldn't fit the JMP try `install_slow`.
             return Ok(None);
         } else {
-            // It was long enough and the allocation failed there's nothing to do.
+            // It was long enough and the allocation failed, there's nothing to do.
+            let jmp_rel_ptr = target.to_ptr().wrapping_byte_add(JMP_INSN_LEN);
             return Err(E::oom(jmp_rel_ptr.addr()).into());
         }
     };
 
-    let jmp_abs_ptr = jmp_abs.as_ptr().wrapping_add(1) as *const ();
-    let thunk = match alloc.os_alloc_near::<AtomicFnPtr<T>>(jmp_abs_ptr, DISP32_RANGE) {
-        Ok(Some(thunk)) => thunk,
-        err => {
-            alloc.reclaim(jmp_abs);
-            err?;
-            return Err(E::oom(jmp_abs_ptr.addr()).into());
-        }
-    };
-
-    let (trampoline, trampoline_bytes) = match prologue.relocate(target, alloc) {
-        Ok(trampoline) => trampoline,
-        Err(e) => {
-            alloc.reclaim(thunk);
-            alloc.reclaim(jmp_abs);
-            return Err(e.into());
-        }
-    };
-
-    let thunk = thunk.write(AtomicFnPtr::new(trampoline));
-    let jmp_abs = JmpAbs::encode_out(jmp_abs, &raw const *thunk as *const ());
-    let jmp_rel = JmpRel::encode(target.to_ptr(), &raw const *jmp_abs as *const ());
-
-    if unsafe { !prologue.try_hook(target, jmp_rel) } {
-        alloc.reclaim(trampoline_bytes);
-        alloc.reclaim(thunk);
-        alloc.reclaim(jmp_abs);
-
+    if unsafe { !prologue.try_hook(target, jmp_chain.jmp_rel.clone()) } {
+        jmp_chain.reclaim();
         return Err(InstallError::TryAgain);
     }
 
-    Ok(Some(Installer { target, thunk }))
+    Ok(Some(Installer {
+        target,
+        thunk: jmp_chain.thunk,
+    }))
 }
 
 #[cold]
 unsafe fn install_slow<T>(
-    _target: T,
-    _context: &mut ProcessContextGuard,
-    _prologue: &Prologue,
+    target: T,
+    alloc: &mut BoundedRangeAllocator,
+    prologue: &Prologue,
 ) -> ::std::result::Result<Installer<T>, InstallError>
 where
     T: FnPtr + 'static,
 {
-    todo!()
+    let Some(jmp_chain) = JmpChain::build(target, alloc, prologue, DISP32_RANGE)? else {
+        let jmp_rel_ptr = target.to_ptr().wrapping_byte_add(JMP_INSN_LEN);
+        return Err(E::oom(jmp_rel_ptr.addr()).into());
+    };
+
+    // TODO: suspend threads here.
+
+    if unsafe { !prologue.try_hook(target, jmp_chain.jmp_rel.clone()) } {
+        jmp_chain.reclaim();
+        return Err(InstallError::TryAgain);
+    }
+
+    Ok(Installer {
+        target,
+        thunk: jmp_chain.thunk,
+    })
+}
+
+impl<'a, T> JmpChain<'a, T>
+where
+    T: FnPtr + 'static,
+{
+    fn build(
+        target: T,
+        alloc: &'a mut BoundedRangeAllocator,
+        prologue: &Prologue,
+        jmp_rel_range: impl RangeBounds<isize> + Clone,
+    ) -> Result<Option<Self>> {
+        let jmp_rel_ptr = target.to_ptr().wrapping_byte_add(JMP_INSN_LEN);
+        let Some(jmp_abs) = alloc.os_alloc_near::<JmpAbs>(jmp_rel_ptr, jmp_rel_range)? else {
+            return Ok(None);
+        };
+
+        let jmp_abs_ptr = jmp_abs.as_ptr().wrapping_add(1) as *const ();
+        let thunk = match alloc.os_alloc_near::<AtomicFnPtr<T>>(jmp_abs_ptr, DISP32_RANGE) {
+            Ok(Some(thunk)) => thunk,
+            err => {
+                alloc.reclaim(jmp_abs);
+                err?;
+                return Err(E::oom(jmp_abs_ptr.addr()).into());
+            }
+        };
+
+        let (trampoline, trampoline_bytes) = match prologue.relocate(target, alloc) {
+            Ok(trampoline) => trampoline,
+            Err(e) => {
+                alloc.reclaim(thunk);
+                alloc.reclaim(jmp_abs);
+                return Err(e.into());
+            }
+        };
+
+        let thunk = thunk.write(AtomicFnPtr::new(trampoline));
+        let jmp_abs = JmpAbs::encode_out(jmp_abs, &raw const *thunk as *const ());
+        let jmp_rel = JmpRel::encode(target.to_ptr(), &raw const *jmp_abs as *const ());
+
+        Ok(Some(Self {
+            alloc,
+            thunk,
+            jmp_abs,
+            jmp_rel,
+            trampoline_bytes,
+        }))
+    }
+
+    #[cold]
+    fn reclaim(self) {
+        self.alloc.reclaim(self.trampoline_bytes);
+        self.alloc.reclaim(self.thunk);
+        self.alloc.reclaim(self.jmp_abs);
+    }
 }
 
 fn decode_instructions(bytes: &[u8; DISASM_LEN], addr: usize) -> Result<Vec<Instruction>> {
@@ -321,10 +378,11 @@ impl<'a> Prologue<'a> {
         let mut min_rel_addr = self.min_rel_addr;
         let mut max_rel_addr = self.max_rel_addr;
 
-        if let insn = insns.last().unwrap()
-            && !insn.is_unconditional_branch()
+        // Append a jump back (but only if control flow falls through).
+        if let last = insns.last().unwrap()
+            && !last.is_unconditional_branch()
         {
-            let target = insn.next_ip();
+            let target = last.next_ip();
 
             // Inserting an IP-relative instruction.
             min_rel_addr = min_rel_addr.min(target as usize);
@@ -383,6 +441,7 @@ impl<'a> Prologue<'a> {
         Ok((trampoline, bytes))
     }
 
+    #[track_caller]
     unsafe fn try_hook<T>(&self, target: T, jmp_rel: JmpRel) -> bool
     where
         T: FnPtr + 'static,
