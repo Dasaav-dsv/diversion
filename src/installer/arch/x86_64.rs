@@ -301,6 +301,7 @@ impl<'a> Prologue<'a> {
             .ok_or_else(|| E::oom(target.to_ptr().addr()))?
             .as_mut();
 
+        let insn_count = insn_count.max(self.insn_count as usize);
         let mut insns = self.insns[..insn_count].to_vec();
 
         if let insn = insns.last().unwrap()
