@@ -59,27 +59,6 @@ impl<T> PodVec<T> {
         self.len += 1;
     }
 
-    #[track_caller]
-    pub fn remove(&mut self, index: usize) -> T {
-        assert!(index <= self.len, "index ({index}) is out of bounds");
-
-        // SAFETY: in-bounds, correctly aligned read.
-        let ptr = unsafe { self.as_mut_ptr().add(index) };
-        let value = unsafe { ptr.read() };
-
-        if index < self.len {
-            // SAFETY: in-bounds backwards copy.
-            unsafe {
-                let count = self.len - index - 1;
-                ptr.copy_from(ptr.add(1), count);
-            }
-        }
-
-        self.len -= 1;
-
-        value
-    }
-
     pub fn as_ptr(&self) -> *const T {
         match self.len {
             0 => ptr::dangling(),

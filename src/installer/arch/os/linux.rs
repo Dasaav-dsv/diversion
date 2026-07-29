@@ -101,11 +101,14 @@ fn proc_pid_maps() -> io::Result<impl Iterator<Item = io::Result<RegionInfo>>> {
     Ok(iter)
 }
 
+#[allow(unused)]
 impl Protection {
     pub const RW: Self = Self((PROT_READ | PROT_WRITE) as u32);
     pub const RX: Self = Self((PROT_READ | PROT_EXEC) as u32);
     pub const RWX: Self = Self((PROT_READ | PROT_WRITE | PROT_EXEC) as u32);
+}
 
+impl Protection {
     pub fn of<T: ?Sized>(ptr: *const T) -> io::Result<Self> {
         let addr = ptr.addr();
         proc_pid_maps()?
@@ -186,6 +189,7 @@ impl Protection {
 }
 
 impl Region {
+    #[allow(unused)]
     pub fn alloc(size: usize, prot: Protection) -> io::Result<Option<Self>> {
         Self::alloc_at(ptr::null(), size, prot)
     }
@@ -221,6 +225,7 @@ impl Region {
         }))
     }
 
+    #[allow(unused)]
     pub unsafe fn free(self) -> io::Result<()> {
         match unsafe { munmap(self.ptr as *mut c_void, self.ptr.len()) } {
             0 => Ok(()),

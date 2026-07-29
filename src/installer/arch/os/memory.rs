@@ -7,7 +7,6 @@ use std::{
 
 #[derive(Clone, Copy, Debug)]
 pub struct SysInfo {
-    pub page_size: usize,
     pub alloc_granularity: usize,
     pub min_address: usize,
     pub max_address: usize,
@@ -39,7 +38,6 @@ impl SysInfo {
             && max_address.is_multiple_of(alloc_granularity);
 
         let info = Self {
-            page_size,
             alloc_granularity,
             min_address,
             max_address,
@@ -67,23 +65,8 @@ impl Region {
         dist: impl RangeBounds<isize>,
         size: usize,
         prot: Protection,
-    ) -> io::Result<Self> {
+    ) -> io::Result<Option<Self>> {
         Self::alloc_inside_bounds(
-            ptr.addr(),
-            dist.start_bound().cloned(),
-            dist.end_bound().cloned(),
-            size,
-            prot,
-        )
-    }
-
-    pub fn alloc_away<T: ?Sized>(
-        ptr: *const T,
-        dist: impl RangeBounds<isize>,
-        size: usize,
-        prot: Protection,
-    ) -> io::Result<Self> {
-        Self::alloc_outside_bounds(
             ptr.addr(),
             dist.start_bound().cloned(),
             dist.end_bound().cloned(),
@@ -98,7 +81,7 @@ impl Region {
         end: Bound<isize>,
         size: usize,
         prot: Protection,
-    ) -> io::Result<Self> {
+    ) -> io::Result<Option<Self>> {
         let min = match start {
             Bound::Excluded(isize::MAX) => return Err(io::ErrorKind::InvalidInput.into()),
             Bound::Excluded(min) => min + 1,
@@ -115,65 +98,6 @@ impl Region {
 
         let info = SysInfo::get();
 
-        if let Some(region) = Self::alloc_in_range(addr, min, max, size, prot, &info)? {
-            return Ok(region);
-        }
-
-        Err(io::Error::new(
-            io::ErrorKind::OutOfMemory,
-            format!("can't allocate {size} bytes near {addr:x} ({min}..={max})"),
-        ))
-    }
-
-    fn alloc_outside_bounds(
-        addr: usize,
-        start: Bound<isize>,
-        end: Bound<isize>,
-        size: usize,
-        prot: Protection,
-    ) -> io::Result<Self> {
-        let min = match start {
-            Bound::Included(isize::MIN) => return Err(io::ErrorKind::InvalidInput.into()),
-            Bound::Included(min) => min - 1,
-            Bound::Excluded(min) => min,
-            Bound::Unbounded => isize::MIN,
-        };
-
-        let max = match end {
-            Bound::Included(isize::MAX) => return Err(io::ErrorKind::InvalidInput.into()),
-            Bound::Included(max) => max + 1,
-            Bound::Excluded(max) => max,
-            Bound::Unbounded => isize::MAX,
-        };
-
-        let info = SysInfo::get();
-
-        if min != isize::MIN
-            && let Some(region) = Self::alloc_in_range(addr, isize::MIN, min, size, prot, &info)?
-        {
-            return Ok(region);
-        }
-
-        if max != isize::MAX
-            && let Some(region) = Self::alloc_in_range(addr, max, isize::MAX, size, prot, &info)?
-        {
-            return Ok(region);
-        }
-
-        Err(io::Error::new(
-            io::ErrorKind::OutOfMemory,
-            format!("can't allocate {size} bytes away from {addr:x} (..{min}, {max}..)"),
-        ))
-    }
-
-    fn alloc_in_range(
-        addr: usize,
-        min: isize,
-        max: isize,
-        size: usize,
-        prot: Protection,
-        info: &SysInfo,
-    ) -> io::Result<Option<Self>> {
         if min > max {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -186,7 +110,7 @@ impl Region {
             .saturating_add_signed(max)
             .min(info.max_address.saturating_sub(size));
 
-        Self::alloc_between(min_addr, max_addr, size, prot, info)
+        Self::alloc_between(min_addr, max_addr, size, prot, &info)
     }
 
     fn alloc_between(
@@ -310,14 +234,6 @@ mod tests {
         const TWO_GB: isize = 2 * 1024 * 1024 * 1024;
         let _region =
             Region::alloc_near(alloc_near as *const (), -TWO_GB..TWO_GB, 16, Protection::RW)
-                .unwrap();
-    }
-
-    #[test]
-    fn alloc_away() {
-        const TWO_GB: isize = 2 * 1024 * 1024 * 1024;
-        let _region =
-            Region::alloc_away(alloc_away as *const (), -TWO_GB..TWO_GB, 16, Protection::RW)
                 .unwrap();
     }
 

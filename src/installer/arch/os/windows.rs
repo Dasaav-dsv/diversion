@@ -2,7 +2,7 @@
 
 mod ffi;
 
-use std::{io, iter, mem, ptr, sync::LazyLock};
+use std::{io, iter, ptr, sync::LazyLock};
 
 use crate::installer::arch::os::{
     memory::{Protection, ProtectionGuard, Region, SysInfo},
@@ -41,11 +41,14 @@ fn virtual_query(ptr: *const ()) -> io::Result<MEMORY_BASIC_INFORMATION> {
     }
 }
 
+#[allow(unused)]
 impl Protection {
     pub const RW: Self = Self(PAGE_READWRITE);
     pub const RX: Self = Self(PAGE_EXECUTE_READ);
     pub const RWX: Self = Self(PAGE_EXECUTE_READWRITE);
+}
 
+impl Protection {
     pub fn of<T: ?Sized>(ptr: *const T) -> io::Result<Self> {
         virtual_query(ptr as *const ()).and_then(|info| match info.State {
             MEM_COMMIT => Ok(Self(info.Protect)),
@@ -95,6 +98,7 @@ impl Protection {
 }
 
 impl Region {
+    #[allow(unused)]
     pub fn alloc(size: usize, prot: Protection) -> io::Result<Option<Self>> {
         Self::alloc_at(ptr::null(), size, prot)
     }
@@ -129,6 +133,7 @@ impl Region {
         }))
     }
 
+    #[allow(unused)]
     pub unsafe fn free(self) -> io::Result<()> {
         match unsafe { VirtualFree(self.ptr as LPVOID, 0, MEM_RELEASE) } {
             0 => Err(io::Error::last_os_error()),

@@ -269,27 +269,6 @@ impl BoundedRangeAllocator {
         }
     }
 
-    /// Attempts to allocate a `MaybeUninit<T>` value within a given distance
-    /// away from the provided address.
-    ///
-    /// Memory is sourced from one of ranges previously adopted with [`Self::adopt_range`],
-    /// it might be necessary to adopt a new range that satisfies `ptr` and `dist`
-    /// for this function to succeed.
-    pub fn alloc_away<T>(
-        &mut self,
-        ptr: *const (impl Any + ?Sized),
-        dist: impl RangeBounds<isize>,
-    ) -> Option<&'static mut MaybeUninit<T>> {
-        // SAFETY: MaybeUninit<T> is always valid for any byte representation.
-        unsafe {
-            self.alloc_outside_bounds(
-                ptr.addr(),
-                dist.start_bound().cloned(),
-                dist.end_bound().cloned(),
-            )
-        }
-    }
-
     /// # Safety
     ///
     /// T must be valid for any byte representation (like MaybeUninit<T>).
@@ -313,56 +292,6 @@ impl BoundedRangeAllocator {
             Bound::Unbounded => isize::MAX,
         };
 
-        unsafe { self.alloc_in_range(addr, min, max) }
-    }
-
-    /// # Safety
-    ///
-    /// T must be valid for any byte representation (like MaybeUninit<T>).
-    unsafe fn alloc_outside_bounds<T>(
-        &mut self,
-        addr: usize,
-        start: Bound<isize>,
-        end: Bound<isize>,
-    ) -> Option<&'static mut T> {
-        let min = match start {
-            Bound::Included(isize::MIN) => return None,
-            Bound::Included(min) => min - 1,
-            Bound::Excluded(min) => min,
-            Bound::Unbounded => isize::MIN,
-        };
-
-        let max = match end {
-            Bound::Included(isize::MAX) => return None,
-            Bound::Included(max) => max + 1,
-            Bound::Excluded(max) => max,
-            Bound::Unbounded => isize::MAX,
-        };
-
-        if min != isize::MIN
-            && let Some(value) = unsafe { self.alloc_in_range(addr, isize::MIN, min) }
-        {
-            return Some(value);
-        }
-
-        if max != isize::MAX
-            && let Some(value) = unsafe { self.alloc_in_range(addr, max, isize::MAX) }
-        {
-            return Some(value);
-        }
-
-        None
-    }
-
-    /// # Safety
-    ///
-    /// T must be valid for any byte representation (like MaybeUninit<T>).
-    unsafe fn alloc_in_range<T>(
-        &mut self,
-        addr: usize,
-        min: isize,
-        max: isize,
-    ) -> Option<&'static mut T> {
         // Lowest possible (requested) address.
         let min_addr = addr.saturating_add_signed(min);
 

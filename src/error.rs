@@ -1,5 +1,6 @@
 use std::io;
 
+use closure_ffi_iced_x86::IcedError;
 use thiserror::Error;
 
 /// The error type returned by functions in this crate.
@@ -20,4 +21,24 @@ pub enum Error {
         "failed to disassemble function prologue at {addr:x} ({bytes:x?}): function is too short to hook safely"
     )]
     TooShort { addr: usize, bytes: [u8; 16] },
+
+    #[error("failed to allocate memory at {addr:x}: {err}")]
+    Alloc { addr: usize, err: io::Error },
+
+    #[error("failed to encode instructions for trampoline at {addr:x}: {err}")]
+    Encode { addr: usize, err: IcedError },
+
+    #[error(
+        "failed to encode instructions for trampoline at {addr:x}: encoding is too long ({size} bytes)"
+    )]
+    EncodeSize { addr: usize, size: usize },
+}
+
+impl Error {
+    pub fn oom(addr: usize) -> Self {
+        Self::Alloc {
+            addr,
+            err: io::ErrorKind::OutOfMemory.into(),
+        }
+    }
 }
