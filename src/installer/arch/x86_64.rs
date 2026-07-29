@@ -54,6 +54,8 @@ struct Prologue<'a> {
     insn_count: u8,
     bytes: &'a [u8; DISASM_LEN],
     insns: &'a [Instruction],
+    min_rel_addr: usize,
+    max_rel_addr: usize,
 }
 
 enum InstallError {
@@ -179,7 +181,13 @@ where
 
     let jmp_rel_ptr = target.to_ptr().wrapping_byte_add(JMP_INSN_LEN);
     let Some(jmp_abs) = alloc.os_alloc_near::<JmpAbs>(jmp_rel_ptr, min..max)? else {
-        return Ok(None);
+        if first_len < JMP_INSN_LEN {
+            // If the first instruction couldn't fit the JMP try `install_slow`.
+            return Ok(None);
+        } else {
+            // It was long enough and the allocation failed there's nothing to do.
+            return Err(E::oom(jmp_rel_ptr.addr()).into());
+        }
     };
 
     let jmp_abs_ptr = jmp_abs.as_ptr().wrapping_add(1) as *const ();
@@ -258,6 +266,10 @@ impl<'a> Prologue<'a> {
             insn_count: 0,
             bytes,
             insns,
+
+            // This simplifies some branching on min/max paths.
+            min_rel_addr: usize::MAX,
+            max_rel_addr: 0,
         };
 
         let mut will_branch = false;
@@ -275,14 +287,16 @@ impl<'a> Prologue<'a> {
                 break;
             }
 
-            // Unconditional control flow, assume padding bytes going forward.
-            will_branch |= matches!(
-                instruction.flow_control(),
-                FlowControl::UnconditionalBranch
-                    | FlowControl::IndirectBranch
-                    | FlowControl::Return
-                    | FlowControl::Interrupt
-            );
+            // Assume padding bytes after unconditional control flow branches.
+            will_branch |= instruction.is_unconditional_branch();
+
+            // Record the lowest and highest relative address accesses if applicable.
+            if instruction.is_ip_rel_memory_operand() {
+                let rel_addr = instruction.ip_rel_memory_address() as usize;
+
+                prologue.min_rel_addr = prologue.min_rel_addr.min(rel_addr);
+                prologue.max_rel_addr = prologue.max_rel_addr.max(rel_addr);
+            }
 
             prologue.min_len += instruction.len() as u8;
             prologue.insn_count += 1;
@@ -300,25 +314,50 @@ impl<'a> Prologue<'a> {
         T: FnPtr + 'static,
     {
         const RELOC_BUF_LEN: usize = 1024;
-        const RELOC_RANGE: (Bound<isize>, Bound<isize>) = (
-            Bound::Included(i32::MIN as isize + 2 * RELOC_BUF_LEN as isize),
-            Bound::Included(i32::MAX as isize - 2 * RELOC_BUF_LEN as isize),
-        );
-
-        let reloc_buf: &mut [_; _] = alloc
-            .os_alloc_near::<[u8; RELOC_BUF_LEN]>(target.to_ptr(), RELOC_RANGE)?
-            .ok_or_else(|| E::oom(target.to_ptr().addr()))?
-            .as_mut();
 
         let insn_count = self.insn_count as usize;
         let mut insns = self.insns[..insn_count].to_vec();
 
+        let mut min_rel_addr = self.min_rel_addr;
+        let mut max_rel_addr = self.max_rel_addr;
+
         if let insn = insns.last().unwrap()
-            && insn.flow_control() == FlowControl::Next
+            && !insn.is_unconditional_branch()
         {
-            let jmp_back = Instruction::with_branch(Code::Jmp_rel32_64, insn.next_ip()).unwrap();
+            let target = insn.next_ip();
+
+            // Inserting an IP-relative instruction.
+            min_rel_addr = min_rel_addr.min(target as usize);
+            max_rel_addr = max_rel_addr.max(target as usize);
+
+            let jmp_back = Instruction::with_branch(Code::Jmp_rel32_64, target).unwrap();
             insns.push(jmp_back);
         }
+
+        let (mid, range) = match max_rel_addr.checked_sub(min_rel_addr) {
+            Some(delta) => {
+                // Midpoint of all IP-relative addresses.
+                let mid = ptr::without_provenance(min_rel_addr.midpoint(max_rel_addr));
+
+                // The midpoint is at most delta / 2 bytes away from min and max bounds.
+                let max_offset = (delta.div_ceil(2) + RELOC_BUF_LEN) as isize;
+
+                // Exclusive bounds to be safe when rounding the midpoint.
+                let min = Bound::Excluded(i32::MIN as isize + max_offset);
+                let max = Bound::Excluded(i32::MAX as isize - max_offset);
+
+                (mid, (min, max))
+            }
+            None => {
+                // There are no IP-relative instructions, don't care where to allocate.
+                (target.to_ptr(), (Bound::Unbounded, Bound::Unbounded))
+            }
+        };
+
+        let reloc_buf: &mut [_; _] = alloc
+            .os_alloc_near::<[u8; RELOC_BUF_LEN]>(mid, range)?
+            .ok_or_else(|| E::oom(target.to_ptr().addr()))?
+            .as_mut();
 
         let block = InstructionBlock::new(&insns, reloc_buf.as_ptr().addr() as u64);
         let bytes = BlockEncoder::encode(64, block, BlockEncoderOptions::NONE)
@@ -339,7 +378,7 @@ impl<'a> Prologue<'a> {
         alloc.reclaim(rest);
 
         let bytes = reloc_buf.write_copy_of_slice(&bytes);
-        let trampoline = unsafe { T::from_ptr(&raw const *bytes as *const ()) };
+        let trampoline = unsafe { T::from_ptr(bytes.as_ptr() as *const ()) };
 
         Ok((trampoline, bytes))
     }
@@ -396,6 +435,22 @@ impl JmpAbs {
             .expect("internal error: pointer is not in range");
 
         out.write(Self::new(disp))
+    }
+}
+
+trait InstructionExt {
+    fn is_unconditional_branch(&self) -> bool;
+}
+
+impl InstructionExt for Instruction {
+    fn is_unconditional_branch(&self) -> bool {
+        matches!(
+            self.flow_control(),
+            FlowControl::UnconditionalBranch
+                | FlowControl::IndirectBranch
+                | FlowControl::Return
+                | FlowControl::Interrupt
+        )
     }
 }
 

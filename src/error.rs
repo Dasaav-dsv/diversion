@@ -22,7 +22,7 @@ pub enum Error {
     )]
     TooShort { addr: usize, bytes: [u8; 16] },
 
-    #[error("failed to allocate memory at {addr:x}: {err}")]
+    #[error("failed to allocate memory nearby {addr:x}: {err}")]
     Alloc { addr: usize, err: io::Error },
 
     #[error("failed to encode instructions for trampoline at {addr:x}: {err}")]
