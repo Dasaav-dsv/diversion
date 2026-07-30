@@ -2,6 +2,7 @@
 
 use std::{
     debug_assert_matches,
+    marker::PhantomData,
     mem::{self, MaybeUninit},
     ops::{Bound, RangeBounds},
     ptr,
@@ -25,7 +26,10 @@ use crate::{
         Installer,
         arch::{
             atomic::U8SliceExt,
-            os::memory::{Protection, Region},
+            os::{
+                memory::{Protection, Region},
+                thread::{IpReloc, ProcessContextExt},
+            },
             x86_64::intrinsics::unaligned_cmpxchg,
         },
     },
@@ -49,21 +53,33 @@ const DISP32_RANGE: (Bound<isize>, Bound<isize>) = (
     Bound::Included(i32::MAX as isize),
 );
 
-struct Prologue<'a> {
-    min_len: u8,
-    insn_count: u8,
+/// The longest instruction sequence length we could fit when relocating.
+/// The allocator will reclaim any unused bytes after the actual length is determined.
+const RELOC_BUF_LEN: usize = 1024;
+
+struct Prologue<'a, T> {
     bytes: &'a [u8; DISASM_LEN],
-    insns: &'a [Instruction],
+    insns: Vec<Instruction>,
     min_rel_addr: usize,
     max_rel_addr: usize,
+    _target: PhantomData<T>,
+    target_addr: usize,
+    trampoline_target_addr: usize,
+}
+
+struct Trampoline<T> {
+    trampoline: T,
+    bytes: &'static mut [u8],
+    relocs: Vec<IpReloc>,
 }
 
 struct JmpChain<'a, T: 'static> {
-    alloc: &'a mut BoundedRangeAllocator,
+    context: &'a mut ProcessContext,
     thunk: &'static mut AtomicFnPtr<T>,
     jmp_abs: &'static mut JmpAbs,
     jmp_rel: JmpRel,
     trampoline_bytes: &'static mut [u8],
+    relocs: Vec<IpReloc>,
 }
 
 enum InstallError {
@@ -71,14 +87,14 @@ enum InstallError {
     TryAgain,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 #[repr(C, packed(1))]
 struct JmpRel {
     opcode: u8,
     disp: i32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 #[repr(C, packed(1))]
 struct JmpAbs {
     opcode: u8,
@@ -123,20 +139,10 @@ where
         };
 
         let prologue_insns = decode_instructions(&prologue_bytes, ptr.addr())?;
-        let prologue = Prologue::analyze(&prologue_bytes, &prologue_insns);
-
-        if prologue.min_len < JMP_INSN_LEN as u8 {
-            // It's not possible to safely insert a 5-byte JMP here.
-            return Err(E::TooShort {
-                addr: ptr.addr(),
-                bytes: *prologue_bytes[..16].as_array().unwrap(),
-            });
-        }
-
-        let alloc = context.bounded_range_alloc();
+        let prologue = Prologue::analyze(ptr.addr(), &prologue_bytes, &prologue_insns)?;
 
         // SAFETY: upheld by caller.
-        let installer = match unsafe { install_fast(target, alloc, &prologue) } {
+        let installer = match unsafe { install_fast(target, &mut context, &prologue) } {
             Ok(installer) => installer,
             Err(InstallError::TryAgain) => continue,
             Err(InstallError::Error(e)) => return Err(e),
@@ -145,7 +151,7 @@ where
         // SAFETY: upheld by caller.
         let installer = match installer {
             Some(installer) => installer,
-            None => match unsafe { install_slow(target, alloc, &prologue) } {
+            None => match unsafe { install_slow(target, &mut context, &prologue) } {
                 Ok(installer) => installer,
                 Err(InstallError::TryAgain) => continue,
                 Err(InstallError::Error(e)) => return Err(e),
@@ -168,8 +174,8 @@ where
 
 unsafe fn install_fast<T>(
     target: T,
-    alloc: &mut BoundedRangeAllocator,
-    prologue: &Prologue,
+    context: &mut ProcessContext,
+    prologue: &Prologue<'_, T>,
 ) -> ::std::result::Result<Option<Installer<T>>, InstallError>
 where
     T: FnPtr + 'static,
@@ -179,7 +185,7 @@ where
 
     let first_len = prologue.insns[0].len();
 
-    assert!(first_len > 0 && first_len < 16);
+    assert!(first_len > 0 && first_len <= MAX_INSN_LEN);
     for i in first_len..JMP_INSN_LEN {
         let byte = prologue.bytes[i];
         min_disp32_bytes[i - 1] = byte;
@@ -189,7 +195,7 @@ where
     let min = i32::from_le_bytes(min_disp32_bytes) as isize;
     let max = i32::from_le_bytes(max_disp32_bytes) as isize;
 
-    let Some(jmp_chain) = JmpChain::build(target, alloc, prologue, min..max)? else {
+    let Some(jmp_chain) = JmpChain::build(target, context, prologue, min..max)? else {
         if first_len < JMP_INSN_LEN {
             // If the first instruction couldn't fit the JMP try `install_slow`.
             return Ok(None);
@@ -200,7 +206,7 @@ where
         }
     };
 
-    if unsafe { !prologue.try_hook(target, jmp_chain.jmp_rel.clone()) } {
+    if unsafe { !prologue.detour(target, jmp_chain.jmp_rel) } {
         jmp_chain.reclaim();
         return Err(InstallError::TryAgain);
     }
@@ -214,22 +220,20 @@ where
 #[cold]
 unsafe fn install_slow<T>(
     target: T,
-    alloc: &mut BoundedRangeAllocator,
-    prologue: &Prologue,
+    context: &mut ProcessContext,
+    prologue: &Prologue<'_, T>,
 ) -> ::std::result::Result<Installer<T>, InstallError>
 where
     T: FnPtr + 'static,
 {
-    let Some(jmp_chain) = JmpChain::build(target, alloc, prologue, DISP32_RANGE)? else {
+    let Some(mut jmp_chain) = JmpChain::build(target, context, prologue, DISP32_RANGE)? else {
         let jmp_rel_ptr = target.to_ptr().wrapping_byte_add(JMP_INSN_LEN);
         return Err(E::oom(jmp_rel_ptr.addr()).into());
     };
 
-    // TODO: suspend threads here.
-
-    if unsafe { !prologue.try_hook(target, jmp_chain.jmp_rel.clone()) } {
+    if let Err(e) = unsafe { prologue.suspend_and_detour(target, &mut jmp_chain) } {
         jmp_chain.reclaim();
-        return Err(InstallError::TryAgain);
+        return Err(e);
     }
 
     Ok(Installer {
@@ -244,10 +248,12 @@ where
 {
     fn build(
         target: T,
-        alloc: &'a mut BoundedRangeAllocator,
-        prologue: &Prologue,
+        context: &'a mut ProcessContext,
+        prologue: &Prologue<'_, T>,
         jmp_rel_range: impl RangeBounds<isize> + Clone,
     ) -> Result<Option<Self>> {
+        let alloc = context.bounded_range_alloc();
+
         let jmp_rel_ptr = target.to_ptr().wrapping_byte_add(JMP_INSN_LEN);
         let Some(jmp_abs) = alloc.os_alloc_near::<JmpAbs>(jmp_rel_ptr, jmp_rel_range)? else {
             return Ok(None);
@@ -259,37 +265,39 @@ where
             err => {
                 alloc.reclaim(jmp_abs);
                 err?;
-                return Err(E::oom(jmp_abs_ptr.addr()).into());
+                return Err(E::oom(jmp_abs_ptr.addr()));
             }
         };
 
-        let (trampoline, trampoline_bytes) = match prologue.relocate(target, alloc) {
-            Ok(trampoline) => trampoline,
+        let relocated = match prologue.relocate(alloc) {
+            Ok(relocated) => relocated,
             Err(e) => {
                 alloc.reclaim(thunk);
                 alloc.reclaim(jmp_abs);
-                return Err(e.into());
+                return Err(e);
             }
         };
 
-        let thunk = thunk.write(AtomicFnPtr::new(trampoline));
+        let thunk = thunk.write(AtomicFnPtr::new(relocated.trampoline));
         let jmp_abs = JmpAbs::encode_out(jmp_abs, &raw const *thunk as *const ());
         let jmp_rel = JmpRel::encode(target.to_ptr(), &raw const *jmp_abs as *const ());
 
         Ok(Some(Self {
-            alloc,
+            context,
             thunk,
             jmp_abs,
             jmp_rel,
-            trampoline_bytes,
+            trampoline_bytes: relocated.bytes,
+            relocs: relocated.relocs,
         }))
     }
 
     #[cold]
     fn reclaim(self) {
-        self.alloc.reclaim(self.trampoline_bytes);
-        self.alloc.reclaim(self.thunk);
-        self.alloc.reclaim(self.jmp_abs);
+        let alloc = self.context.bounded_range_alloc();
+        alloc.reclaim(self.trampoline_bytes);
+        alloc.reclaim(self.thunk);
+        alloc.reclaim(self.jmp_abs);
     }
 }
 
@@ -316,86 +324,95 @@ fn decode_instructions(bytes: &[u8; DISASM_LEN], addr: usize) -> Result<Vec<Inst
     })
 }
 
-impl<'a> Prologue<'a> {
-    fn analyze(bytes: &'a [u8; DISASM_LEN], insns: &'a [Instruction]) -> Self {
+impl<'a, T> Prologue<'a, T>
+where
+    T: FnPtr + 'static,
+{
+    fn analyze(
+        target_addr: usize,
+        bytes: &'a [u8; DISASM_LEN],
+        insns: &'a [Instruction],
+    ) -> Result<Self> {
         let mut prologue = Self {
-            min_len: 0,
-            insn_count: 0,
             bytes,
-            insns,
+            insns: vec![],
 
-            // This simplifies some branching on min/max paths.
+            // This simplifies some logic on min/max paths.
             min_rel_addr: usize::MAX,
             max_rel_addr: 0,
+
+            _target: PhantomData,
+            target_addr,
+            trampoline_target_addr: target_addr,
         };
 
+        let mut min_len = 0;
+        let mut min_count = 0;
         let mut will_branch = false;
 
-        for instruction in insns {
-            if instruction.is_invalid() {
+        for insn in insns.iter().take_while(|insn| !insn.is_invalid()) {
+            if min_len >= JMP_INSN_LEN {
+                // Break if we decoded enough to insert the jump and relocate.
                 break;
             }
 
-            if prologue.min_len >= JMP_INSN_LEN as u8
-                || will_branch && !matches!(instruction.code(), Code::Int1 | Code::Int3 | Code::Ud2)
-            {
-                // Break if we decoded enough to insert the jump and relocate,
-                // OR if there is a non-padding byte after an assumed end of a function.
-                break;
+            // Assume these instruction bytes are safe to overwrite.
+            min_len += insn.len();
+
+            if will_branch {
+                // Break if there is a non-padding byte after an assumed end of a function.
+                match insn.code() {
+                    Code::Int1 | Code::Int3 | Code::Ud2 => continue,
+                    _ => break,
+                }
             }
+
+            // Include this instruction.
+            min_count += 1;
 
             // Assume padding bytes after unconditional control flow branches.
-            will_branch |= instruction.is_unconditional_branch();
+            will_branch = insn.is_unconditional_branch();
 
             // Record the lowest and highest relative address accesses if applicable.
-            if instruction.is_ip_rel_memory_operand() {
-                let rel_addr = instruction.ip_rel_memory_address() as usize;
+            if insn.is_ip_rel_memory_operand() {
+                let rel_addr = insn.ip_rel_memory_address() as usize;
 
                 prologue.min_rel_addr = prologue.min_rel_addr.min(rel_addr);
                 prologue.max_rel_addr = prologue.max_rel_addr.max(rel_addr);
             }
-
-            prologue.min_len += instruction.len() as u8;
-            prologue.insn_count += 1;
         }
 
-        prologue
+        if min_len < JMP_INSN_LEN {
+            // It's not possible to safely insert a 5-byte JMP here.
+            return Err(E::TooShort {
+                addr: prologue.target_addr,
+                bytes: *bytes[..16].as_array().unwrap(),
+            });
+        }
+
+        assert!(min_count > 0 && min_count <= insns.len());
+        prologue.insns = insns[..min_count].to_vec();
+        let last = prologue.insns.last().unwrap();
+
+        // Unconditionally append a jump back (even if control flow doesn't fall through).
+        let trampoline_target = last.next_ip();
+        prologue.trampoline_target_addr = trampoline_target as usize;
+
+        // Inserting an IP-relative instruction.
+        prologue.min_rel_addr = prologue.min_rel_addr.min(prologue.trampoline_target_addr);
+        prologue.max_rel_addr = prologue.max_rel_addr.max(prologue.trampoline_target_addr);
+
+        let jmp_back = Instruction::with_branch(Code::Jmp_rel32_64, trampoline_target).unwrap();
+        prologue.insns.push(jmp_back);
+
+        Ok(prologue)
     }
 
-    fn relocate<T>(
-        &self,
-        target: T,
-        alloc: &mut BoundedRangeAllocator,
-    ) -> Result<(T, &'static mut [u8])>
-    where
-        T: FnPtr + 'static,
-    {
-        const RELOC_BUF_LEN: usize = 1024;
-
-        let insn_count = self.insn_count as usize;
-        let mut insns = self.insns[..insn_count].to_vec();
-
-        let mut min_rel_addr = self.min_rel_addr;
-        let mut max_rel_addr = self.max_rel_addr;
-
-        // Append a jump back (but only if control flow falls through).
-        if let last = insns.last().unwrap()
-            && !last.is_unconditional_branch()
-        {
-            let target = last.next_ip();
-
-            // Inserting an IP-relative instruction.
-            min_rel_addr = min_rel_addr.min(target as usize);
-            max_rel_addr = max_rel_addr.max(target as usize);
-
-            let jmp_back = Instruction::with_branch(Code::Jmp_rel32_64, target).unwrap();
-            insns.push(jmp_back);
-        }
-
-        let (mid, range) = match max_rel_addr.checked_sub(min_rel_addr) {
+    fn relocate(&self, alloc: &mut BoundedRangeAllocator) -> Result<Trampoline<T>> {
+        let (mid, range) = match self.max_rel_addr.checked_sub(self.min_rel_addr) {
             Some(delta) => {
                 // Midpoint of all IP-relative addresses.
-                let mid = ptr::without_provenance(min_rel_addr.midpoint(max_rel_addr));
+                let mid = ptr::without_provenance(self.min_rel_addr.midpoint(self.max_rel_addr));
 
                 // The midpoint is at most delta / 2 bytes away from min and max bounds.
                 let max_offset = (delta.div_ceil(2) + RELOC_BUF_LEN) as isize;
@@ -408,44 +425,123 @@ impl<'a> Prologue<'a> {
             }
             None => {
                 // There are no IP-relative instructions, don't care where to allocate.
-                (target.to_ptr(), (Bound::Unbounded, Bound::Unbounded))
+                let ptr = ptr::without_provenance(self.target_addr);
+                (ptr, (Bound::Unbounded, Bound::Unbounded))
             }
         };
 
-        let reloc_buf: &mut [_; _] = alloc
+        // Over-allocate and reclaim unused bytes later.
+        let reloc_buf = alloc
             .os_alloc_near::<[u8; RELOC_BUF_LEN]>(mid, range)?
-            .ok_or_else(|| E::oom(target.to_ptr().addr()))?
+            .ok_or_else(|| E::oom(self.target_addr))?
             .as_mut();
 
-        let block = InstructionBlock::new(&insns, reloc_buf.as_ptr().addr() as u64);
-        let bytes = BlockEncoder::encode(64, block, BlockEncoderOptions::NONE)
-            .map_err(|err| E::Encode {
-                addr: target.to_ptr().addr(),
-                err,
-            })?
-            .code_buffer;
+        let (bytes, relocs) = match self.encode_out(reloc_buf) {
+            Ok(bytes_and_relocs) => bytes_and_relocs,
+            Err(e) => {
+                alloc.reclaim(reloc_buf);
+                return Err(e);
+            }
+        };
 
-        if reloc_buf.len() < bytes.len() {
-            return Err(E::EncodeSize {
-                addr: target.to_ptr().addr(),
-                size: bytes.len(),
-            });
-        }
-
+        // Take used bytes, reclaim the rest.
         let (reloc_buf, rest) = reloc_buf.split_at_mut(bytes.len());
         alloc.reclaim(rest);
 
         let bytes = reloc_buf.write_copy_of_slice(&bytes);
         let trampoline = unsafe { T::from_ptr(bytes.as_ptr() as *const ()) };
 
-        Ok((trampoline, bytes))
+        Ok(Trampoline {
+            trampoline,
+            bytes,
+            relocs,
+        })
+    }
+
+    fn encode_out(&self, buf: &mut [MaybeUninit<u8>]) -> Result<(Vec<u8>, Vec<IpReloc>)> {
+        // We would like to know the addresses of all relocated instructions
+        // to perform ip relocation as needed.
+        let encoded = BlockEncoder::encode(
+            64,
+            InstructionBlock::new(&self.insns, buf.as_ptr().addr() as u64),
+            BlockEncoderOptions::RETURN_NEW_INSTRUCTION_OFFSETS,
+        )
+        .map_err(|err| E::Encode {
+            addr: self.target_addr,
+            err,
+        })?;
+
+        let bytes = encoded.code_buffer;
+
+        if bytes.len() > buf.len() {
+            return Err(E::EncodeSize {
+                addr: self.target_addr,
+                size: bytes.len(),
+            });
+        }
+
+        // Don't emit a reloc for the jump we appended.
+        let (_, insns) = self.insns.split_last().unwrap();
+
+        // Due to an unfortunate design flaw in `BlockEncoder` used with
+        // `RETURN_NEW_INSTRUCTION_OFFSETS` it's not possible to know
+        // the relocated ip addresses for fixed up instructions.
+        let mut relocs = Vec::with_capacity(insns.len());
+        let offsets = &encoded.new_instruction_offsets[1..insns.len()];
+
+        // We might need to do an extra decoder pass to determine some of the offsets.
+        let mut decoder = Decoder::new(64, &bytes, DecoderOptions::NO_INVALID_CHECK);
+        let mut instruction = Instruction::new();
+        let mut last_ip = encoded.rip;
+
+        // Don't emit a reloc for the first instruction either.
+        for i in 1..insns.len().min(offsets.len()) {
+            let new_ip = match offsets[i] {
+                u32::MAX => {
+                    // Have to disassemble at the previous position.
+                    let prev_offset = offsets[i - 1];
+
+                    // If the previous instruction was also fixed up it becomes impossible
+                    // to tell where the next one (this one) starts.
+                    if prev_offset != u32::MAX {
+                        decoder.set_position(prev_offset as usize).unwrap();
+                        decoder.decode_out(&mut instruction);
+                        last_ip = instruction.next_ip();
+                    }
+
+                    last_ip
+                }
+                offset => encoded.rip + offset as u64,
+            };
+
+            relocs.push(IpReloc {
+                from: insns[i].ip() as usize,
+                to: new_ip as usize,
+            });
+        }
+
+        Ok((bytes, relocs))
+    }
+
+    unsafe fn suspend_and_detour(
+        &self,
+        target: T,
+        jmp_chain: &mut JmpChain<'_, T>,
+    ) -> ::std::result::Result<(), InstallError> {
+        let _suspend_guard = jmp_chain
+            .context
+            .suspend_and_reloc_other_threads(&jmp_chain.relocs)
+            .map_err(E::Suspend)?;
+
+        if unsafe { self.detour(target, jmp_chain.jmp_rel) } {
+            return Err(InstallError::TryAgain);
+        }
+
+        Ok(())
     }
 
     #[track_caller]
-    unsafe fn try_hook<T>(&self, target: T, jmp_rel: JmpRel) -> bool
-    where
-        T: FnPtr + 'static,
-    {
+    unsafe fn detour(&self, target: T, jmp_rel: JmpRel) -> bool {
         unsafe {
             let old = *self.bytes[..8].as_array().unwrap();
 

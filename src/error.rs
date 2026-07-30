@@ -32,6 +32,9 @@ pub enum Error {
         "failed to encode instructions for trampoline at {addr:x}: encoding is too long ({size} bytes)"
     )]
     EncodeSize { addr: usize, size: usize },
+
+    #[error("failed to suspend other threads: {0}")]
+    Suspend(io::Error),
 }
 
 impl Error {

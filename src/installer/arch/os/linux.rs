@@ -7,13 +7,17 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
+use diversion_abi::context::process::ProcessContext;
 use libc::{
     _SC_PAGESIZE, EEXIST, ENOMEM, MAP_ANONYMOUS, MAP_FAILED, MAP_FIXED_NOREPLACE, MAP_PRIVATE,
     PROT_EXEC, PROT_READ, PROT_WRITE, RLIM_INFINITY, RLIMIT_AS, getrlimit, mmap, mprotect, munmap,
     sysconf,
 };
 
-use crate::installer::arch::os::memory::{Protection, ProtectionGuard, Region, SysInfo};
+use crate::installer::arch::os::{
+    memory::{Protection, ProtectionGuard, Region, SysInfo},
+    thread::{ProcessContextExt, ThreadSuspendGuard},
+};
 
 #[derive(Clone, Copy, Debug)]
 struct RegionInfo {
@@ -331,4 +335,10 @@ impl RegionInfo {
 
         Some(RegionInfo { start, end, prot })
     }
+}
+
+impl ProcessContextExt for ProcessContext {}
+
+impl Drop for ThreadSuspendGuard<'_> {
+    fn drop(&mut self) {}
 }

@@ -4,8 +4,11 @@ mod ffi;
 
 use std::{io, iter, ptr, sync::LazyLock};
 
+use diversion_abi::context::process::ProcessContext;
+
 use crate::installer::arch::os::{
     memory::{Protection, ProtectionGuard, Region, SysInfo},
+    thread::{ProcessContextExt, ThreadSuspendGuard},
     windows::ffi::{
         ERROR_COMMITMENT_LIMIT, ERROR_INVALID_ADDRESS, ERROR_NOT_ENOUGH_MEMORY, GetSystemInfo,
         LPCVOID, LPVOID, MEM_COMMIT, MEM_FREE, MEM_RELEASE, MEM_RESERVE, MEMORY_BASIC_INFORMATION,
@@ -173,4 +176,17 @@ impl From<MEMORY_BASIC_INFORMATION> for Region {
             prot: (info.State != MEM_FREE).then_some(Protection(info.Protect)),
         }
     }
+}
+
+impl ProcessContextExt for ProcessContext {
+    fn suspend_and_reloc_other_threads<'a>(
+        &'a mut self,
+        relocs: &'a [super::thread::IpReloc],
+    ) -> io::Result<ThreadSuspendGuard<'a>> {
+        Ok(ThreadSuspendGuard { context: self })
+    }
+}
+
+impl Drop for ThreadSuspendGuard<'_> {
+    fn drop(&mut self) {}
 }
