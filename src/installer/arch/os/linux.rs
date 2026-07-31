@@ -16,7 +16,7 @@ use libc::{
 
 use crate::installer::arch::os::{
     memory::{Protection, ProtectionGuard, Region, SysInfo},
-    thread::{ProcessContextExt, ThreadSuspendGuard},
+    thread::{IpReloc, ProcessContextExt, ThreadSuspendGuard},
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -337,8 +337,15 @@ impl RegionInfo {
     }
 }
 
-impl ProcessContextExt for ProcessContext {}
+impl ProcessContextExt for ProcessContext {
+    fn suspend_and_reloc_other_threads<'h, 'r>(
+        &'h mut self,
+        relocs: &'r [IpReloc],
+    ) -> io::Result<ThreadSuspendGuard<'h, 'r>> {
+        Err(io::Error::other("not implemented"))
+    }
+}
 
-impl Drop for ThreadSuspendGuard<'_> {
+impl Drop for ThreadSuspendGuard<'_, '_> {
     fn drop(&mut self) {}
 }

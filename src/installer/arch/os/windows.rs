@@ -8,7 +8,7 @@ use diversion_abi::context::process::ProcessContext;
 
 use crate::installer::arch::os::{
     memory::{Protection, ProtectionGuard, Region, SysInfo},
-    thread::{ProcessContextExt, ThreadSuspendGuard},
+    thread::{IpReloc, ProcessContextExt, ThreadSuspendGuard},
     windows::ffi::{
         ERROR_COMMITMENT_LIMIT, ERROR_INVALID_ADDRESS, ERROR_NOT_ENOUGH_MEMORY, GetSystemInfo,
         LPCVOID, LPVOID, MEM_COMMIT, MEM_FREE, MEM_RELEASE, MEM_RESERVE, MEMORY_BASIC_INFORMATION,
@@ -179,14 +179,27 @@ impl From<MEMORY_BASIC_INFORMATION> for Region {
 }
 
 impl ProcessContextExt for ProcessContext {
-    fn suspend_and_reloc_other_threads<'a>(
-        &'a mut self,
-        relocs: &'a [super::thread::IpReloc],
-    ) -> io::Result<ThreadSuspendGuard<'a>> {
-        Ok(ThreadSuspendGuard { context: self })
+    fn suspend_and_reloc_other_threads<'h, 'r>(
+        &'h mut self,
+        relocs: &'r [IpReloc],
+    ) -> io::Result<ThreadSuspendGuard<'h, 'r>> {
+        if relocs.is_empty() {
+            // No ip relocations to be done.
+            return Ok(ThreadSuspendGuard {
+                handles: &[],
+                relocs: &[],
+            });
+        }
+        
+        // FIXME: be mindful of freeing hook memory on fail after an ip relocation
+
+        Ok(ThreadSuspendGuard {
+            handles: &[],
+            relocs,
+        })
     }
 }
 
-impl Drop for ThreadSuspendGuard<'_> {
+impl Drop for ThreadSuspendGuard<'_, '_> {
     fn drop(&mut self) {}
 }

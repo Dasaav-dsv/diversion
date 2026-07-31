@@ -279,8 +279,8 @@ where
         };
 
         let thunk = thunk.write(AtomicFnPtr::new(relocated.trampoline));
-        let jmp_abs = JmpAbs::encode_out(jmp_abs, &raw const *thunk as *const ());
-        let jmp_rel = JmpRel::encode(target.to_ptr(), &raw const *jmp_abs as *const ());
+        let jmp_abs = jmp_abs.write(JmpAbs::encode(jmp_abs, thunk));
+        let jmp_rel = JmpRel::encode(target.to_ptr(), jmp_abs);
 
         Ok(Some(Self {
             context,
@@ -542,12 +542,12 @@ where
 
     #[track_caller]
     unsafe fn detour(&self, target: T, jmp_rel: JmpRel) -> bool {
+        let old = *self.bytes[..size_of::<u64>()].as_array().unwrap();
+
+        let mut new = old;
+        new[..size_of::<JmpRel>()].copy_from_slice(jmp_rel.as_bytes());
+
         unsafe {
-            let old = *self.bytes[..8].as_array().unwrap();
-
-            let mut new = old;
-            new[..size_of::<JmpRel>()].copy_from_slice(jmp_rel.as_bytes());
-
             unaligned_cmpxchg(
                 &u64::from_le_bytes(new),
                 &u64::from_le_bytes(old),
@@ -563,10 +563,8 @@ impl JmpRel {
     }
 
     #[track_caller]
-    fn encode(ip: *const (), target: *const ()) -> Self {
-        let disp = i32::try_from(target as isize - ip.cast::<Self>().wrapping_add(1) as isize)
-            .expect("internal error: pointer is not in range");
-
+    fn encode<Ip: ?Sized, Tgt: ?Sized>(ip: *const Ip, target: *const Tgt) -> Self {
+        let disp = disp32(ip.addr() + size_of::<Self>(), target.addr());
         Self::new(disp)
     }
 
@@ -585,12 +583,15 @@ impl JmpAbs {
     }
 
     #[track_caller]
-    fn encode_out(out: &mut MaybeUninit<JmpAbs>, target: *const ()) -> &mut Self {
-        let disp = i32::try_from(target as isize - out.as_ptr().wrapping_add(1) as isize)
-            .expect("internal error: pointer is not in range");
-
-        out.write(Self::new(disp))
+    fn encode<Ip: ?Sized, Tgt: ?Sized>(ip: *const Ip, target: *const Tgt) -> Self {
+        let disp = disp32(ip.addr() + size_of::<Self>(), target.addr());
+        Self::new(disp)
     }
+}
+
+#[track_caller]
+fn disp32(ip: usize, target: usize) -> i32 {
+    i32::try_from(target as isize - ip as isize).expect("pointer is not in range")
 }
 
 trait InstructionExt {

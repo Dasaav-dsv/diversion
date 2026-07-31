@@ -1,18 +1,20 @@
 use std::io;
 
-use diversion_abi::context::process::ProcessContext;
+type ThreadHandle = cfg_select! {
+    windows => { *mut std::ffi::c_void }
+    unix => { u32 }
+};
 
 pub trait ProcessContextExt {
-    fn suspend_and_reloc_other_threads<'a>(
-        &'a mut self,
-        relocs: &'a [IpReloc],
-    ) -> io::Result<ThreadSuspendGuard<'a>> {
-        Err(io::Error::other("not implemented"))
-    }
+    fn suspend_and_reloc_other_threads<'h, 'r>(
+        &'h mut self,
+        relocs: &'r [IpReloc],
+    ) -> io::Result<ThreadSuspendGuard<'h, 'r>>;
 }
 
-pub struct ThreadSuspendGuard<'a> {
-    pub context: &'a mut ProcessContext,
+pub struct ThreadSuspendGuard<'h, 'r> {
+    pub(super) handles: &'h [ThreadHandle],
+    pub(super) relocs: &'r [IpReloc],
 }
 
 #[derive(Clone, Copy, Debug)]
