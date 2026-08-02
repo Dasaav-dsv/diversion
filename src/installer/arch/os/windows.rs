@@ -245,21 +245,25 @@ impl Thread {
         })
     }
 
-    pub unsafe fn set_ip_if(&self, f: impl FnOnce(usize) -> Option<usize>) {
+    pub unsafe fn set_ip_if(&self, f: impl FnOnce(usize) -> Option<usize>) -> Option<usize> {
         let mut context = CONTEXT {
             ContextFlags: CONTEXT_CONTROL,
             ..Default::default()
         };
 
         if unsafe { GetThreadContext(self.handle, &mut context) == 0 } {
-            return;
+            return None;
         }
 
-        if let Some(new_ip) = f(context.RIP as usize) {
-            unsafe {
+        let ip = context.RIP as usize;
+
+        match f(ip) {
+            Some(new_ip) => unsafe {
                 context.RIP = new_ip as u64;
                 let _ = SetThreadContext(self.handle, &context);
-            }
+                Some(new_ip)
+            },
+            None => Some(ip),
         }
     }
 

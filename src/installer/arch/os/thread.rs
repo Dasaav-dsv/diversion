@@ -49,16 +49,28 @@ pub fn suspend_and_reloc_other_threads<'a, 'r>(
     let mut context = LibraryContext::acquire();
 
     for thread in &*threads {
-        if !context.is_thread_parked(thread.id, thread.start_time, thread.run_time) {
-            unsafe {
-                thread.set_ip_if(|ip| {
-                    if ip < min_ip || ip > max_ip {
-                        return None;
-                    }
-                    let reloc = relocs.iter().find(|reloc| ip == reloc.from);
-                    reloc.map(|reloc| reloc.to)
-                })
-            }
+        // If this thread's times are unchanged it's assumed to be on standby.
+        let paused_ip = context.get_paused_thread_ip(thread.id, thread.start_time, thread.run_time);
+
+        if paused_ip.is_some_and(|ip| ip < min_ip || ip > max_ip) {
+            // Skip this paused thread if its last known ip doesn't need a reloc.
+            continue;
+        }
+
+        let new_ip = unsafe {
+            thread.set_ip_if(|ip| {
+                if ip >= min_ip && ip <= max_ip {
+                    // Map ip from `reloc.from` to `reloc.to`.
+                    Some(relocs.iter().find(|reloc| ip == reloc.from)?.to)
+                } else {
+                    None
+                }
+            })
+        };
+
+        // Update the observed ip of this thread to whatever the new value is.
+        if let Some(ip) = new_ip {
+            context.set_thread_ip(thread.id, ip);
         }
     }
 
@@ -66,13 +78,14 @@ pub fn suspend_and_reloc_other_threads<'a, 'r>(
 }
 
 impl ThreadSuspendGuard<'_, '_> {
+    #[cold]
     pub fn undo_relocs(self) {
+        // This function should be called very infrequently, so it's not optimized
+        // for threads assumed to be paused.
         for thread in self.threads {
             unsafe {
-                thread.set_ip_if(|ip| {
-                    let undo_reloc = self.relocs.iter().find(|reloc| ip == reloc.to);
-                    undo_reloc.map(|undo| undo.from)
-                })
+                // Inverse of suspend_and_reloc_other_threads, map from `r.to` to `r.from`.
+                thread.set_ip_if(|ip| Some(self.relocs.iter().find(|r| ip == r.to)?.from));
             }
         }
     }
