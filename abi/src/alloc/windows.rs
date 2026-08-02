@@ -3,7 +3,6 @@
 use std::{
     ffi::{OsStr, c_void},
     io, mem,
-    num::NonZero,
     os::windows::ffi::OsStrExt,
     ptr,
     sync::LazyLock,
@@ -42,6 +41,8 @@ const MEM_RELEASE: DWORD = 0x00008000;
 const FILE_MAP_READ: DWORD = 0x00000004;
 const FILE_MAP_WRITE: DWORD = 0x00000002;
 
+const ERROR_ALREADY_EXISTS: DWORD = 183;
+
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 struct SYSTEM_INFO {
@@ -76,6 +77,8 @@ struct FILETIME {
 }
 
 unsafe extern "system" {
+    unsafe fn GetLastError() -> DWORD;
+
     unsafe fn GetSystemInfo(lpSystemInfo: LPSYSTEM_INFO);
 
     unsafe fn VirtualAlloc(
@@ -164,13 +167,8 @@ impl MmapName {
 }
 
 impl MmapRaw {
-    pub unsafe fn open(
-        name: &MmapName,
-        create_size: NonZero<u32>,
-        open_size: u32,
-    ) -> io::Result<Self> {
+    pub unsafe fn named(name: &MmapName, size: u32) -> io::Result<Self> {
         let name = name.0.as_ptr();
-        let size = create_size.get().min(open_size).max(1);
 
         let handle = unsafe {
             CreateFileMappingW(
@@ -178,7 +176,7 @@ impl MmapRaw {
                 ptr::null_mut(),
                 PAGE_READWRITE,
                 0,
-                size,
+                size.max(1),
                 name,
             )
         };
@@ -187,8 +185,41 @@ impl MmapRaw {
             return Err(io::Error::last_os_error());
         }
 
-        let ptr =
-            unsafe { MapViewOfFile(handle, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, size as SIZE_T) };
+        let is_new_mapping = unsafe { GetLastError() != ERROR_ALREADY_EXISTS };
+
+        let ptr = unsafe { MapViewOfFile(handle, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, 0) };
+
+        if !is_new_mapping {
+            // The mapping handle may be closed now.
+            unsafe {
+                let _ = CloseHandle(handle);
+            }
+        }
+
+        if ptr.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+
+        Ok(Self { ptr })
+    }
+
+    pub unsafe fn anon(size: u32) -> io::Result<Self> {
+        let handle = unsafe {
+            CreateFileMappingW(
+                INVALID_HANDLE_VALUE,
+                ptr::null_mut(),
+                PAGE_READWRITE,
+                0,
+                size.max(1),
+                ptr::null(),
+            )
+        };
+
+        if handle.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+
+        let ptr = unsafe { MapViewOfFile(handle, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, 0) };
 
         // The mapping handle may be closed now.
         unsafe {
@@ -199,7 +230,7 @@ impl MmapRaw {
             return Err(io::Error::last_os_error());
         }
 
-        Ok(Self { ptr, size })
+        Ok(Self { ptr })
     }
 }
 

@@ -19,6 +19,7 @@ use crate::{
 /// DO NOT TOUCH: this is a part of the internal, perma-unstable API.
 pub struct LibraryContext {
     closures: ClosureMap,
+    threads: ThreadMap,
 }
 
 /// Library-wide `diversion` context mutex guard.
@@ -38,12 +39,19 @@ type ClosureThunkId = (Address, TypeId);
 
 type ClosureMap = HashMap<ClosureThunkId, &'static ErasedClosureList, Xxh3DefaultBuilder>;
 
+type ThreadId = u32;
+
+type ThreadTimes = (u64, u64);
+
+type ThreadMap = HashMap<ThreadId, ThreadTimes, Xxh3DefaultBuilder>;
+
 static LIBRARY_CONTEXT: Mutex<LibraryContext> = Mutex::new(LibraryContext::new());
 
 impl LibraryContext {
     const fn new() -> Self {
         Self {
             closures: ClosureMap::with_hasher(Xxh3DefaultBuilder::new()),
+            threads: ThreadMap::with_hasher(Xxh3DefaultBuilder::new()),
         }
     }
 
@@ -70,6 +78,16 @@ impl LibraryContext {
         self.closures
             .entry((address, type_id))
             .or_insert_with(|| Box::leak(Box::default()))
+    }
+
+    /// Checks if a thread's execution times haven't changed since the last call
+    /// to `is_thread_parked` with this thread id.
+    ///
+    /// This only meaningfully determines if the thread *hasn't* ran (when the timers
+    /// are unchanged).
+    pub fn is_thread_parked(&mut self, id: ThreadId, start_time: u64, run_time: u64) -> bool {
+        let now = (start_time, run_time);
+        self.threads.insert(id, now).is_some_and(|prev| prev == now)
     }
 }
 

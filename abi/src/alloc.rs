@@ -1,6 +1,6 @@
 #![cfg(feature = "process_ctx")]
 
-use std::{ffi::c_void, io, num::NonZero, process};
+use std::{ffi::c_void, io, process};
 
 use crate::VERSION;
 
@@ -20,19 +20,18 @@ cfg_select! {
 #[derive(Clone, Debug)]
 pub struct MmapBuilder {
     name: MmapName,
-    size: NonZero<u32>,
+    size: u32,
 }
 
 #[derive(Debug)]
 pub struct MmapRaw {
     ptr: *mut c_void,
+    #[cfg(unix)]
     size: u32,
 }
 
 impl MmapBuilder {
     pub fn new(size: u32) -> io::Result<Self> {
-        let size = NonZero::new(size).unwrap_or(NonZero::<u32>::MIN);
-
         let start_time = start_time()?;
         let pid = process::id();
 
@@ -42,11 +41,11 @@ impl MmapBuilder {
         Ok(Self { name, size })
     }
 
-    pub unsafe fn open(&self, size: u32) -> io::Result<MmapRaw> {
+    pub unsafe fn open(&self) -> io::Result<MmapRaw> {
         unsafe {
             cfg_select! {
-                unix => MmapRaw::open(&self.name, self.size, size),
-                windows => MmapRaw::open(&self.name, self.size, size),
+                unix => MmapRaw::named(&self.name, self.size),
+                windows => MmapRaw::named(&self.name, self.size),
             }
         }
     }
@@ -55,11 +54,6 @@ impl MmapBuilder {
 impl MmapRaw {
     pub fn as_mut_ptr(&mut self) -> *mut c_void {
         self.ptr
-    }
-
-    #[allow(unused)]
-    pub fn size(&self) -> u32 {
-        self.size
     }
 }
 
@@ -72,6 +66,6 @@ mod tests {
         const KB: u32 = 1024;
 
         let builder = MmapBuilder::new(128 * KB).unwrap();
-        let _mmap = unsafe { builder.open(1 * KB).unwrap() };
+        let _mmap = unsafe { builder.open().unwrap() };
     }
 }

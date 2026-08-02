@@ -1,8 +1,6 @@
 use std::{
     ffi::{c_char, c_int},
-    fs, io, mem,
-    num::NonZero,
-    ptr, thread,
+    fs, io, mem, ptr, thread,
     time::Duration,
 };
 
@@ -63,13 +61,9 @@ impl<T> PodVec<T> {
 }
 
 impl MmapRaw {
-    pub unsafe fn open(
-        name: &MmapName,
-        create_size: NonZero<u32>,
-        open_size: u32,
-    ) -> io::Result<Self> {
+    pub unsafe fn named(name: &MmapName, size: u32) -> io::Result<Self> {
         let name = name.0.as_ptr() as *const c_char;
-        let mut create_size = create_size.get();
+        let mut size = size.max(1);
 
         // Attempt to create a shared memory object first.
         // The `O_EXCL` flag guarantees the function to return `EEXIST` if it already exists.
@@ -81,7 +75,7 @@ impl MmapRaw {
 
         let fd = match res {
             Ok(fd) => {
-                if unsafe { ftruncate(fd, create_size.into()) < 0 } {
+                if unsafe { ftruncate(fd, size.into()) < 0 } {
                     let e = io::Error::last_os_error();
 
                     // Since `ftruncate` failed, close and unlink, otherwise another potential
@@ -113,7 +107,7 @@ impl MmapRaw {
 
                     if stat.st_size > 0 {
                         // `ftruncate` has been called so it's safe to return.
-                        create_size = stat.st_size.clamp(0, u32::MAX as i64) as u32;
+                        size = stat.st_size.clamp(0, u32::MAX as i64) as u32;
                         break fd;
                     }
 
@@ -123,8 +117,6 @@ impl MmapRaw {
             },
             Err(e) => return Err(e),
         };
-
-        let size = open_size.min(create_size).max(1);
 
         let ptr = unsafe {
             mmap(
@@ -141,6 +133,25 @@ impl MmapRaw {
         unsafe {
             let _ = close(fd);
         }
+
+        match ptr {
+            MAP_FAILED => Err(io::Error::last_os_error()),
+            _ => Ok(Self { ptr, size }),
+        }
+    }
+
+    pub unsafe fn anon(size: u32) -> io::Result<Self> {
+        let size = size.max(1);
+        let ptr = unsafe {
+            mmap(
+                ptr::null_mut(),
+                size as usize,
+                PROT_READ | PROT_WRITE | PROT_EXEC,
+                MAP_PRIVATE | MAP_ANONYMOUS,
+                -1,
+                0,
+            )
+        };
 
         match ptr {
             MAP_FAILED => Err(io::Error::last_os_error()),

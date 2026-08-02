@@ -4,17 +4,19 @@ mod ffi;
 
 use std::{io, iter, ptr, sync::LazyLock};
 
-use diversion_abi::context::process::ProcessContext;
-
 use crate::installer::arch::os::{
     memory::{Protection, ProtectionGuard, Region, SysInfo},
-    thread::{IpReloc, ProcessContextExt, ThreadSuspendGuard},
+    thread::Thread,
     windows::ffi::{
-        ERROR_COMMITMENT_LIMIT, ERROR_INVALID_ADDRESS, ERROR_NOT_ENOUGH_MEMORY, GetSystemInfo,
-        LPCVOID, LPVOID, MEM_COMMIT, MEM_FREE, MEM_RELEASE, MEM_RESERVE, MEMORY_BASIC_INFORMATION,
+        CONTEXT, CONTEXT_CONTROL, CloseHandle, DWORD, ERROR_COMMITMENT_LIMIT,
+        ERROR_INVALID_ADDRESS, ERROR_NOT_ENOUGH_MEMORY, GetCurrentProcess, GetCurrentThreadId,
+        GetSystemInfo, GetThreadContext, GetThreadId, GetThreadTimes, LPCVOID, LPVOID, MEM_COMMIT,
+        MEM_FREE, MEM_RELEASE, MEM_RESERVE, MEMORY_BASIC_INFORMATION, NtGetNextThread,
         PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY,
-        PAGE_GUARD, PAGE_NOCACHE, PAGE_READWRITE, PAGE_WRITECOMBINE, VirtualAlloc, VirtualFree,
-        VirtualProtect, VirtualQuery,
+        PAGE_GUARD, PAGE_NOCACHE, PAGE_READWRITE, PAGE_WRITECOMBINE, ResumeThread, STATUS_SUCCESS,
+        SetThreadContext, SuspendThread, THREAD_GET_CONTEXT, THREAD_QUERY_INFORMATION,
+        THREAD_SET_CONTEXT, THREAD_SUSPEND_RESUME, VirtualAlloc, VirtualFree, VirtualProtect,
+        VirtualQuery,
     },
 };
 
@@ -63,7 +65,8 @@ impl Protection {
     }
 
     pub unsafe fn protect(self, ptr: *const [u8]) -> io::Result<()> {
-        match unsafe { VirtualProtect(ptr as LPVOID, ptr.len(), self.0, &mut 0) } {
+        let mut _old = 0;
+        match unsafe { VirtualProtect(ptr as LPVOID, ptr.len(), self.0, &mut _old) } {
             0 => Err(io::Error::last_os_error()),
             _ => Ok(()),
         }
@@ -178,28 +181,92 @@ impl From<MEMORY_BASIC_INFORMATION> for Region {
     }
 }
 
-impl ProcessContextExt for ProcessContext {
-    fn suspend_and_reloc_other_threads<'h, 'r>(
-        &'h mut self,
-        relocs: &'r [IpReloc],
-    ) -> io::Result<ThreadSuspendGuard<'h, 'r>> {
-        if relocs.is_empty() {
-            // No ip relocations to be done.
-            return Ok(ThreadSuspendGuard {
-                handles: &[],
-                relocs: &[],
-            });
-        }
-        
-        // FIXME: be mindful of freeing hook memory on fail after an ip relocation
+impl Thread {
+    pub unsafe fn suspend_others_iter() -> impl Iterator<Item = Thread> {
+        let my_process = unsafe { GetCurrentProcess() };
+        let my_id = unsafe { GetCurrentThreadId() };
 
-        Ok(ThreadSuspendGuard {
-            handles: &[],
-            relocs,
+        let mut handle = ptr::null_mut();
+
+        iter::from_fn(move || unsafe {
+            let id = loop {
+                if NtGetNextThread(
+                    my_process,
+                    handle,
+                    THREAD_QUERY_INFORMATION
+                        | THREAD_SUSPEND_RESUME
+                        | THREAD_GET_CONTEXT
+                        | THREAD_SET_CONTEXT,
+                    0,
+                    0,
+                    &mut handle,
+                ) != STATUS_SUCCESS
+                {
+                    return None;
+                }
+
+                let id = GetThreadId(handle);
+
+                if id == 0 {
+                    return None;
+                }
+
+                if id != my_id {
+                    break id;
+                }
+            };
+
+            if SuspendThread(handle) == DWORD::MAX {
+                return None;
+            }
+
+            let mut create_time = Default::default();
+            let mut _exit_time = Default::default();
+            let mut kernel_time = Default::default();
+            let mut user_time = Default::default();
+
+            if GetThreadTimes(
+                handle,
+                &mut create_time,
+                &mut _exit_time,
+                &mut kernel_time,
+                &mut user_time,
+            ) == 0
+            {
+                return None;
+            }
+
+            Some(Thread {
+                handle,
+                id,
+                start_time: create_time.into(),
+                run_time: u64::from(kernel_time) + u64::from(user_time),
+            })
         })
     }
-}
 
-impl Drop for ThreadSuspendGuard<'_, '_> {
-    fn drop(&mut self) {}
+    pub unsafe fn set_ip_if(&self, f: impl FnOnce(usize) -> Option<usize>) {
+        let mut context = CONTEXT {
+            ContextFlags: CONTEXT_CONTROL,
+            ..Default::default()
+        };
+
+        if unsafe { GetThreadContext(self.handle, &mut context) == 0 } {
+            return;
+        }
+
+        if let Some(new_ip) = f(context.RIP as usize) {
+            unsafe {
+                context.RIP = new_ip as u64;
+                let _ = SetThreadContext(self.handle, &context);
+            }
+        }
+    }
+
+    pub unsafe fn resume(&self) {
+        unsafe {
+            let _ = ResumeThread(self.handle);
+            let _ = CloseHandle(self.handle);
+        }
+    }
 }

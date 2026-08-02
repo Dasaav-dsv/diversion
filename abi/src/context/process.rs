@@ -13,9 +13,9 @@ use closure_ffi::traits::{Any, FnPtr};
 
 use crate::{
     Address,
-    alloc::{MmapBuilder, vec::PodVec},
+    alloc::{MmapBuilder, MmapRaw, vec::PodVec},
     fn_ptr::{AtomicErasedFnPtr, AtomicFnPtr},
-    sync::pod::{PodMutex, PodMutexGuard},
+    sync::pod::{MutexGuard, PodMutex, PodSpinMutex},
 };
 
 /// Process-wide `diversion` context.
@@ -37,7 +37,7 @@ pub struct ProcessContextGuard {
     context: &'static mut ProcessContext,
 
     // ...the global lock acquired after the library lock.
-    _context_guard: PodMutexGuard<'static>,
+    _context_guard: MutexGuard<'static>,
 }
 
 #[derive(Debug)]
@@ -53,6 +53,15 @@ pub struct BoundedRangeAllocator {
 pub struct ThunkSlot<F> {
     index: usize,
     target: F,
+}
+
+/// N.B. this struct is a POD type.
+#[derive(Debug)]
+#[repr(C)]
+struct ProcessContextOuter {
+    inner_ptr: *mut ProcessContextInner,
+    inner_size: u32,
+    mutex: PodSpinMutex,
 }
 
 /// N.B. this struct is a POD type.
@@ -80,54 +89,45 @@ impl ProcessContext {
     /// DO NOT TOUCH: this is a part of the internal, perma-unstable API.
     pub fn acquire() -> io::Result<ProcessContextGuard> {
         static PROCESS_CONTEXT: AtomicPtr<ProcessContextInner> = AtomicPtr::new(ptr::null_mut());
+        const INNER_SIZE: u32 = {
+            let size = 16 * 1024 * 1024;
+            assert!(size >= size_of::<ProcessContextInner>());
+            size as u32
+        };
 
         let mut inner_ptr = PROCESS_CONTEXT.load(Ordering::Acquire);
 
         // Check if we need to initialize the static pointer.
         if inner_ptr.is_null() {
-            const MB: u32 = 1024 * 1024;
-
-            let mut size = 16 * MB;
-            let mmap_builder = MmapBuilder::new(size)?;
-
             // Check if the process global shared memory needs to be initialized.
+            let mmap_builder = MmapBuilder::new(size_of::<ProcessContextOuter>() as u32)?;
+
             // Keep the drop order in mind: first `_guard` and then `mmap`.
-            {
-                // SAFETY: as long as no one other than `diversion` code opens this map.
-                // Below assume the returned memory map is at least `size` long.
-                let mut mmap = unsafe { mmap_builder.open(size)? };
-                let inner_ptr = mmap.as_mut_ptr().cast::<ProcessContextInner>();
+            // SAFETY: as long as no one other than `diversion` code opens this map.
+            let mut mmap = unsafe { mmap_builder.open()? };
+            let outer_ptr = mmap.as_mut_ptr().cast::<ProcessContextOuter>();
 
-                // SAFETY: the zeroed (newly created mmap) bit pattern is valid for this mutex.
-                #[allow(clippy::deref_addrof)]
-                let _guard = unsafe { (*(&raw const (*inner_ptr).mutex)).lock() };
+            // SAFETY: the zeroed (newly created mmap) bit pattern is valid for this mutex.
+            #[allow(clippy::deref_addrof)]
+            let _guard = unsafe { (*(&raw const (*outer_ptr).mutex)).lock() };
 
-                // SAFETY: just locked the mutex, memory access is exclusive.
-                let inner = unsafe { &mut *inner_ptr };
+            // SAFETY: just locked the mutex, memory access is exclusive.
+            let outer = unsafe { &mut *outer_ptr };
 
-                if inner.size == 0 {
+            if outer.inner_ptr.is_null() {
+                // SAFETY: `INNER_SIZE >= size_of::<ProcessContextInner>()`.
+                unsafe {
                     // Process global shared memory has *not* been initialized.
-                    inner.size = size;
+                    let mut inner = ManuallyDrop::new(MmapRaw::anon(INNER_SIZE)?);
+                    outer.inner_ptr = inner.as_mut_ptr().cast::<ProcessContextInner>();
+                    outer.inner_size = INNER_SIZE;
+                    (*outer.inner_ptr).size = INNER_SIZE;
                 }
-
-                // Get the actual size since it may have been initialized by another thread.
-                size = inner.size;
             }
 
-            // SAFETY: assume size is valid (and no one else opens this map).
-            let mut mmap = unsafe { ManuallyDrop::new(mmap_builder.open(size)?) };
-            inner_ptr = mmap.as_mut_ptr().cast::<ProcessContextInner>();
-
-            if let Err(ptr) = PROCESS_CONTEXT.compare_exchange(
-                ptr::null_mut(),
-                inner_ptr,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                // This thread wasn't the one to write the static, so close the map.
-                inner_ptr = ptr;
-                let _ = ManuallyDrop::into_inner(mmap);
-            }
+            // Get the pointer which may have been initialized by another thread.
+            inner_ptr = outer.inner_ptr;
+            PROCESS_CONTEXT.store(inner_ptr, Ordering::Release);
         }
 
         // SAFETY: the map has been initialized and these references are valid.
@@ -211,8 +211,9 @@ impl BoundedRangeAllocator {
         let range_len = range.len();
         let range = range.as_mut_ptr_range();
 
-        if self.min_addr > range.start.addr() {
-            self.min_addr = range.start.addr();
+        // When zero-initialized `self.min_addr` starts at 0.
+        if self.min_addr.wrapping_sub(1) > range.start.addr() {
+            self.min_addr = range.start.addr() + 1;
         }
 
         if self.max_addr < range.end.addr() {
@@ -323,7 +324,10 @@ impl BoundedRangeAllocator {
         let min_addr = min_addr.next_multiple_of(align_of::<T>());
         let max_addr = max_addr & align_of::<T>().wrapping_neg();
 
-        if min_addr > max_addr || self.max_addr <= min_addr || self.min_addr >= max_addr {
+        if min_addr > max_addr
+            || self.max_addr <= min_addr
+            || self.min_addr.wrapping_sub(1) >= max_addr
+        {
             // Can't serve this range.
             return None;
         }

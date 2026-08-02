@@ -115,12 +115,13 @@ const CONTEXT_BASE: DWORD = cfg_select! {
 };
 
 #[derive(Clone, Copy, Default, Debug)]
+#[repr(C)]
 pub struct FILETIME {
     pub dwLowDateTime: DWORD,
     pub dwHighDateTime: DWORD,
 }
 
-pub type LPFILETIME = *mut SYSTEM_INFO;
+pub type LPFILETIME = *mut FILETIME;
 
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
@@ -339,6 +340,10 @@ unsafe extern "system" {
         lpflOldProtect: PDWORD,
     ) -> BOOL;
 
+    pub unsafe fn GetCurrentThreadId() -> DWORD;
+
+    pub unsafe fn GetThreadId(Thread: HANDLE) -> DWORD;
+
     pub unsafe fn SuspendThread(hThread: HANDLE) -> DWORD;
 
     pub unsafe fn ResumeThread(hThread: HANDLE) -> DWORD;
@@ -373,6 +378,12 @@ unsafe extern "system" {
         Flags: DWORD,
         NewThreadHandle: PHANDLE,
     ) -> NTSTATUS;
+}
+
+impl From<FILETIME> for u64 {
+    fn from(time: FILETIME) -> Self {
+        ((time.dwHighDateTime as u64) << 32) | time.dwLowDateTime as u64
+    }
 }
 
 impl Default for SYSTEM_INFO {

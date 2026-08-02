@@ -28,7 +28,7 @@ use crate::{
             atomic::U8SliceExt,
             os::{
                 memory::{Protection, Region},
-                thread::{IpReloc, ProcessContextExt},
+                thread::{IpReloc, suspend_and_reloc_other_threads},
             },
             x86_64::intrinsics::unaligned_cmpxchg,
         },
@@ -495,11 +495,15 @@ where
         let mut last_ip = encoded.rip;
 
         // Don't emit a reloc for the first instruction either.
-        for i in 1..insns.len().min(offsets.len()) {
-            let new_ip = match offsets[i] {
+        // `offsets` start at the second instruction.
+        for i in 1..insns.len().min(offsets.len() + 1) {
+            let new_ip = match offsets[i - 1] {
                 u32::MAX => {
                     // Have to disassemble at the previous position.
-                    let prev_offset = offsets[i - 1];
+                    let prev_offset = match i {
+                        1 => 0,
+                        i => offsets[i - 2],
+                    };
 
                     // If the previous instruction was also fixed up it becomes impossible
                     // to tell where the next one (this one) starts.
@@ -528,12 +532,12 @@ where
         target: T,
         jmp_chain: &mut JmpChain<'_, T>,
     ) -> ::std::result::Result<(), InstallError> {
-        let _suspend_guard = jmp_chain
-            .context
-            .suspend_and_reloc_other_threads(&jmp_chain.relocs)
-            .map_err(E::Suspend)?;
+        let suspend_guard =
+            suspend_and_reloc_other_threads(jmp_chain.context.bump_alloc(), &jmp_chain.relocs)
+                .map_err(E::Suspend)?;
 
-        if unsafe { self.detour(target, jmp_chain.jmp_rel) } {
+        if unsafe { !self.detour(target, jmp_chain.jmp_rel) } {
+            suspend_guard.undo_relocs();
             return Err(InstallError::TryAgain);
         }
 
