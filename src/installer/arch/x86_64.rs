@@ -41,10 +41,6 @@ const MAX_INSN_LEN: usize = 15;
 /// A 4-byte instruction followed by a 15-byte one, where an E9 JMP overlaps both.
 const DISASM_LEN: usize = JmpRel::LEN - 1 + MAX_INSN_LEN;
 
-/// The longest instruction sequence length we could fit when relocating.
-/// The allocator will reclaim any unused bytes after the actual length is determined.
-const RELOC_BUF_LEN: usize = 1024;
-
 #[derive(Debug)]
 struct JmpChain<'a> {
     context: &'a mut ProcessContext,

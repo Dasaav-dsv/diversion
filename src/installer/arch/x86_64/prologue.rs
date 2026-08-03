@@ -12,7 +12,7 @@ use crate::{
     installer::arch::{
         os::thread::{IpReloc, suspend_and_reloc_other_threads},
         x86_64::{
-            BoundedRangeAllocatorExt, DISASM_LEN, InstallError, JmpChain, JmpRel, RELOC_BUF_LEN,
+            BoundedRangeAllocatorExt, DISASM_LEN, InstallError, JmpChain, JmpRel,
             intrinsics::unaligned_cmpxchg,
         },
     },
@@ -34,6 +34,10 @@ pub struct Trampoline {
     pub bytes: &'static mut [u8],
     pub relocs: Vec<IpReloc>,
 }
+
+/// The longest instruction sequence length we could fit when relocating.
+/// The allocator will reclaim any unused bytes after the actual length is determined.
+const RELOC_BUF_LEN: usize = 1024;
 
 impl<'a> Prologue<'a> {
     pub fn analyze(target_addr: usize, bytes: &'a [u8; DISASM_LEN]) -> Result<Self> {
@@ -306,36 +310,38 @@ impl InstructionExt for Instruction {
 
 #[cfg(test)]
 mod tests {
-    use crate::installer::arch::x86_64::{DISASM_LEN, prologue::Prologue};
+    use std::mem::MaybeUninit;
+
+    use crate::installer::arch::x86_64::{
+        DISASM_LEN,
+        prologue::{Prologue, RELOC_BUF_LEN},
+    };
 
     #[test]
     fn simple_prologue() {
-        Prologue::analyze(
-            0x1000,
-            &pad([0x55, 0x48, 0x83, 0xec, 0x30, 0x48, 0x8d, 0x6c, 0x24, 0x30]),
-        )
-        .unwrap();
+        analyze_and_reencode(&[0x55, 0x48, 0x83, 0xec, 0x30, 0x48, 0x8d, 0x6c, 0x24, 0x30])
     }
 
     #[test]
     fn prologue() {
-        Prologue::analyze(
-            0x1000,
-            &pad([
-                0x55, 0x56, 0x57, 0x53, 0x48, 0x83, 0xec, 0x38, 0x48, 0x8d, 0x6c, 0x24, 0x30,
-            ]),
-        )
-        .unwrap();
+        analyze_and_reencode(&[
+            0x55, 0x56, 0x57, 0x53, 0x48, 0x83, 0xec, 0x38, 0x48, 0x8d, 0x6c, 0x24, 0x30,
+        ]);
     }
 
     #[test]
     fn no_prologue() {
-        Prologue::analyze(0x1000, &pad([0xb8, 0x01, 0x00, 0x00, 0x00, 0x00, 0xc3])).unwrap();
+        analyze_and_reencode(&[0xb8, 0x01, 0x00, 0x00, 0x00, 0x00, 0xc3]);
     }
 
     #[test]
     fn no_prologue_ret() {
-        Prologue::analyze(0x1000, &pad([0xc3])).unwrap();
+        analyze_and_reencode(&[0xc3]);
+    }
+
+    #[test]
+    fn no_prologue_jmp() {
+        analyze_and_reencode(&[0xe9, 0xde, 0xad, 0xbe, 0xef]);
     }
 
     #[test]
@@ -343,13 +349,14 @@ mod tests {
         Prologue::analyze(0x1000, &[0xc3; _]).unwrap_err();
     }
 
-    const fn pad<const N: usize>(bytes: [u8; N]) -> [u8; DISASM_LEN] {
-        let mut padded = [0xcc; DISASM_LEN];
-        let mut i = 0;
-        while i < bytes.len() && i < padded.len() {
-            padded[i] = bytes[i];
-            i += 1;
-        }
-        padded
+    fn analyze_and_reencode(bytes: &[u8]) {
+        let mut input = [0xcc; DISASM_LEN];
+        let mut output = [MaybeUninit::<u8>::uninit(); RELOC_BUF_LEN];
+
+        let min = bytes.len().min(input.len());
+        input[..min].copy_from_slice(&bytes[..min]);
+
+        let prologue = Prologue::analyze(input.as_ptr().addr(), &input).unwrap();
+        prologue.encode_out(&mut output).unwrap();
     }
 }
