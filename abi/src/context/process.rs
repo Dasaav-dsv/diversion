@@ -1,6 +1,7 @@
 #![cfg(feature = "process_ctx")]
 
 use std::{
+    alloc::Layout,
     io,
     mem::{ManuallyDrop, MaybeUninit},
     ops::{Bound, Deref, DerefMut, RangeBounds},
@@ -288,6 +289,17 @@ impl BoundedRangeAllocator {
         start: Bound<isize>,
         end: Bound<isize>,
     ) -> Option<&'static mut T> {
+        let bytes = self.alloc_layout_inside_bounds(Layout::new::<T>(), addr, start, end)?;
+        unsafe { Some(&mut *bytes.as_mut_ptr().cast::<T>()) }
+    }
+
+    fn alloc_layout_inside_bounds(
+        &mut self,
+        layout: Layout,
+        addr: usize,
+        start: Bound<isize>,
+        end: Bound<isize>,
+    ) -> Option<&'static mut [MaybeUninit<u8>]> {
         let min = match start {
             Bound::Excluded(isize::MAX) => return None,
             Bound::Excluded(min) => min + 1,
@@ -308,21 +320,19 @@ impl BoundedRangeAllocator {
         // Highest possible address accounting for allocation size.
         let max_addr = addr
             .saturating_add_signed(max)
-            .min(self.max_addr.saturating_sub(size_of::<T>()));
+            .min(self.max_addr.saturating_sub(layout.size()));
 
-        unsafe { self.alloc_between(min_addr, max_addr) }
+        self.alloc_layout_between(layout, min_addr, max_addr)
     }
 
-    /// # Safety
-    ///
-    /// T must be valid for any byte representation (like MaybeUninit<T>).
-    unsafe fn alloc_between<T>(
+    fn alloc_layout_between(
         &mut self,
+        layout: Layout,
         min_addr: usize,
         max_addr: usize,
-    ) -> Option<&'static mut T> {
-        let min_addr = min_addr.next_multiple_of(align_of::<T>());
-        let max_addr = max_addr & align_of::<T>().wrapping_neg();
+    ) -> Option<&'static mut [MaybeUninit<u8>]> {
+        let min_addr = min_addr.next_multiple_of(layout.align());
+        let max_addr = max_addr & layout.align().wrapping_neg();
 
         if min_addr > max_addr
             || self.max_addr <= min_addr
@@ -333,21 +343,26 @@ impl BoundedRangeAllocator {
         }
 
         // Can allocate from the start without splitting the range in two.
-        unsafe fn alloc_from_start<T>(start: &mut *mut MaybeUninit<u8>) -> &'static mut T {
+        unsafe fn alloc_from_start(
+            start: &mut *mut MaybeUninit<u8>,
+            size: usize,
+        ) -> &'static mut [MaybeUninit<u8>] {
             unsafe {
-                let ptr = start.cast::<T>();
-                *start = start.byte_add(size_of::<T>());
-                &mut *ptr
+                let ptr = *start;
+                *start = start.byte_add(size);
+                slice::from_raw_parts_mut(ptr, size)
             }
         }
 
         // Can allocate from the end without splitting the range in two.
-        unsafe fn alloc_from_end<T>(end: &mut *mut MaybeUninit<u8>) -> &'static mut T {
+        unsafe fn alloc_from_end(
+            end: &mut *mut MaybeUninit<u8>,
+            size: usize,
+        ) -> &'static mut [MaybeUninit<u8>] {
             unsafe {
-                let new_end = end.byte_sub(size_of::<T>());
-                let ptr = new_end.cast::<T>();
-                *end = new_end;
-                &mut *ptr
+                let ptr = end.byte_sub(size);
+                *end = ptr;
+                slice::from_raw_parts_mut(ptr, size)
             }
         }
 
@@ -366,40 +381,42 @@ impl BoundedRangeAllocator {
 
         // Probe available ranges starting from the lowest.
         for (index, [start, end]) in iter {
-            // Lowest possible address that fits the alignment requirements of T.
+            // Lowest possible address that fits the alignment requirements.
             let min = start
                 .expose_provenance()
                 .max(min_addr)
-                .next_multiple_of(align_of::<T>());
+                .next_multiple_of(layout.align());
 
-            // Highest possible address that fits the size and alignment requirements of T.
+            // Highest possible address that fits the size and alignment requirements.
             let max = end
                 .expose_provenance()
-                .saturating_sub(size_of::<T>())
+                .saturating_sub(layout.size())
                 .min(max_addr)
-                & align_of::<T>().wrapping_neg();
+                & layout.align().wrapping_neg();
 
             if min > max {
                 // Range is too small.
                 continue;
             }
 
+            let size = layout.size();
+
             // Prefer allocating unaligned values from the start and aligned from the end.
             // When the start or the end are equal to one of the bounds, splitting the range
             // can be avoided.
-            if const { align_of::<T>() == 1 } {
+            if layout.align() == 1 {
                 if start.addr() == min {
-                    return unsafe { Some(alloc_from_start(start)) };
+                    return unsafe { Some(alloc_from_start(start, size)) };
                 }
-                if end.addr() == max + size_of::<T>() {
-                    return unsafe { Some(alloc_from_end(end)) };
+                if end.addr() == max + size {
+                    return unsafe { Some(alloc_from_end(end, size)) };
                 }
             } else {
-                if end.addr() == max + size_of::<T>() {
-                    return unsafe { Some(alloc_from_end(end)) };
+                if end.addr() == max + size {
+                    return unsafe { Some(alloc_from_end(end, size)) };
                 }
                 if start.addr() == min {
-                    return unsafe { Some(alloc_from_start(start)) };
+                    return unsafe { Some(alloc_from_start(start, size)) };
                 }
             }
 
@@ -408,11 +425,11 @@ impl BoundedRangeAllocator {
             let new_len = min - new_start.addr();
 
             // Split into three ranges:
-            // [start, min) ... [min, min + size_of::<T>()) ... [min + size_of::<T>(), end)
+            // [start, min) ... [min, min + size) ... [min + size, end)
             let new_end = unsafe { new_start.add(new_len) };
 
-            // Set this range to be the [min + size_of::<T>(), end) one.
-            *start = unsafe { new_end.add(size_of::<T>()) };
+            // Set this range to be the [min + size, end) one.
+            *start = unsafe { new_end.add(size) };
 
             // Skipping this step when `new_len` is small forgets some bytes,
             // but avoids inserting a tiny range. That memory will never be reclaimed.
@@ -421,8 +438,8 @@ impl BoundedRangeAllocator {
                 self.ranges.insert(index, [new_start, new_end]);
             }
 
-            // Return [min, min + size_of::<T>()) as T.
-            return unsafe { Some(&mut *new_end.cast::<T>()) };
+            // Return [min, min + size).
+            return unsafe { Some(slice::from_raw_parts_mut(new_end, size)) };
         }
 
         None
