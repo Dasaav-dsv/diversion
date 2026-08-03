@@ -1,5 +1,6 @@
 /// Atomic 64-bit compare and exchange.
 #[cfg(not(windows))]
+#[inline(never)]
 pub unsafe fn unaligned_cmpxchg(new: *const u64, old: *const u64, dst: *mut u64) -> bool {
     unsafe {
         let success: u8;
