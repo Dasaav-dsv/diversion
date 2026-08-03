@@ -1,6 +1,5 @@
-use std::{marker::PhantomData, mem::MaybeUninit, ops::Bound, ptr};
+use std::{mem::MaybeUninit, ops::Bound, ptr};
 
-use closure_ffi::traits::FnPtr;
 use closure_ffi_iced_x86::{
     BlockEncoder, BlockEncoderOptions, Code, Decoder, DecoderOptions, FlowControl, Instruction,
     InstructionBlock,
@@ -19,26 +18,24 @@ use crate::{
     },
 };
 
-pub struct Prologue<'a, T> {
+#[derive(Debug)]
+pub struct Prologue<'a> {
     pub bytes: &'a [u8; DISASM_LEN],
     pub insns: Vec<Instruction>,
     min_rel_addr: usize,
     max_rel_addr: usize,
-    _target: PhantomData<T>,
     target_addr: usize,
     trampoline_target_addr: usize,
 }
 
-pub struct Trampoline<T> {
-    pub trampoline: T,
+#[derive(Debug)]
+pub struct Trampoline {
+    pub trampoline_ptr: *const (),
     pub bytes: &'static mut [u8],
     pub relocs: Vec<IpReloc>,
 }
 
-impl<'a, T> Prologue<'a, T>
-where
-    T: FnPtr + 'static,
-{
+impl<'a> Prologue<'a> {
     pub fn analyze(target_addr: usize, bytes: &'a [u8; DISASM_LEN]) -> Result<Self> {
         let insns = decode_instructions(target_addr, bytes)?;
 
@@ -50,7 +47,6 @@ where
             min_rel_addr: usize::MAX,
             max_rel_addr: 0,
 
-            _target: PhantomData,
             target_addr,
             trampoline_target_addr: target_addr,
         };
@@ -116,7 +112,7 @@ where
         Ok(prologue)
     }
 
-    pub fn relocate(&self, alloc: &mut BoundedRangeAllocator) -> Result<Trampoline<T>> {
+    pub fn relocate(&self, alloc: &mut BoundedRangeAllocator) -> Result<Trampoline> {
         let (mid, range) = match self.max_rel_addr.checked_sub(self.min_rel_addr) {
             Some(delta) => {
                 // Midpoint of all IP-relative addresses.
@@ -157,10 +153,10 @@ where
         alloc.reclaim(rest);
 
         let bytes = reloc_buf.write_copy_of_slice(&bytes);
-        let trampoline = unsafe { T::from_ptr(bytes.as_ptr() as *const ()) };
+        let trampoline_ptr = bytes.as_ptr() as *const ();
 
         Ok(Trampoline {
-            trampoline,
+            trampoline_ptr,
             bytes,
             relocs,
         })
@@ -237,8 +233,8 @@ where
 
     pub unsafe fn suspend_and_detour(
         &self,
-        target: T,
-        jmp_chain: &mut JmpChain<'_, T>,
+        target: *const (),
+        jmp_chain: &mut JmpChain<'_>,
     ) -> ::std::result::Result<(), InstallError> {
         let suspend_guard =
             suspend_and_reloc_other_threads(jmp_chain.context.bump_alloc(), &jmp_chain.relocs)
@@ -253,7 +249,7 @@ where
     }
 
     #[track_caller]
-    pub unsafe fn detour(&self, target: T, jmp_rel: JmpRel) -> bool {
+    pub unsafe fn detour(&self, target: *const (), jmp_rel: JmpRel) -> bool {
         let old = *self.bytes[..size_of::<u64>()].as_array().unwrap();
 
         let mut new = old;
@@ -263,7 +259,7 @@ where
             unaligned_cmpxchg(
                 &u64::from_le_bytes(new),
                 &u64::from_le_bytes(old),
-                target.to_ptr() as *mut u64,
+                target as *mut u64,
             )
         }
     }
@@ -305,5 +301,55 @@ impl InstructionExt for Instruction {
                 | FlowControl::Return
                 | FlowControl::Interrupt
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::installer::arch::x86_64::{DISASM_LEN, prologue::Prologue};
+
+    #[test]
+    fn simple_prologue() {
+        Prologue::analyze(
+            0x1000,
+            &pad([0x55, 0x48, 0x83, 0xec, 0x30, 0x48, 0x8d, 0x6c, 0x24, 0x30]),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn prologue() {
+        Prologue::analyze(
+            0x1000,
+            &pad([
+                0x55, 0x56, 0x57, 0x53, 0x48, 0x83, 0xec, 0x38, 0x48, 0x8d, 0x6c, 0x24, 0x30,
+            ]),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn no_prologue() {
+        Prologue::analyze(0x1000, &pad([0xb8, 0x01, 0x00, 0x00, 0x00, 0x00, 0xc3])).unwrap();
+    }
+
+    #[test]
+    fn no_prologue_ret() {
+        Prologue::analyze(0x1000, &pad([0xc3])).unwrap();
+    }
+
+    #[test]
+    fn no_prologue_ret_no_padding() {
+        Prologue::analyze(0x1000, &[0xc3; _]).unwrap_err();
+    }
+
+    const fn pad<const N: usize>(bytes: [u8; N]) -> [u8; DISASM_LEN] {
+        let mut padded = [0xcc; DISASM_LEN];
+        let mut i = 0;
+        while i < bytes.len() && i < padded.len() {
+            padded[i] = bytes[i];
+            i += 1;
+        }
+        padded
     }
 }

@@ -3,15 +3,16 @@
 use std::{
     debug_assert_matches,
     mem::{self, MaybeUninit},
-    ops::{Bound, RangeBounds},
+    ops::RangeBounds,
     ptr,
+    range::RangeInclusive,
     sync::atomic::Ordering,
 };
 
 use closure_ffi::traits::FnPtr;
 use diversion_abi::{
     context::process::{BoundedRangeAllocator, ProcessContext},
-    fn_ptr::AtomicFnPtr,
+    fn_ptr::AtomicErasedFnPtr,
 };
 
 use crate::{
@@ -44,33 +45,39 @@ const DISASM_LEN: usize = JmpRel::LEN - 1 + MAX_INSN_LEN;
 /// The allocator will reclaim any unused bytes after the actual length is determined.
 const RELOC_BUF_LEN: usize = 1024;
 
-struct JmpChain<'a, T: 'static> {
+#[derive(Debug)]
+struct JmpChain<'a> {
     context: &'a mut ProcessContext,
-    thunk: &'static mut AtomicFnPtr<T>,
+    thunk: &'static mut AtomicErasedFnPtr,
     jmp_abs: &'static mut JmpAbs,
     jmp_rel: JmpRel,
     trampoline_bytes: &'static mut [u8],
     relocs: Vec<IpReloc>,
 }
 
-enum InstallError {
-    Error(E),
-    TryAgain,
-}
-
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[repr(C, packed(1))]
 struct JmpRel {
     opcode: u8,
     disp: i32,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[repr(C, packed(1))]
 struct JmpAbs {
     opcode: u8,
     modrm: u8,
     disp: i32,
+}
+
+struct ErasedInstaller {
+    target: *const (),
+    thunk: &'static AtomicErasedFnPtr,
+}
+
+enum InstallError {
+    Error(E),
+    TryAgain,
 }
 
 pub unsafe fn install<T>(target: T) -> Result<Installer<T>>
@@ -92,7 +99,8 @@ where
         // but its length is not possible to know before decoding its instructions.
         // This *may* cause an unlikely issue where this access spills over onto an
         // uncommitted page (and `Protection::make_rwx` fails).
-        let ptr = ptr::slice_from_raw_parts_mut(target.to_ptr() as *mut u8, DISASM_LEN);
+        let target_ptr = target.to_ptr();
+        let ptr = ptr::slice_from_raw_parts_mut(target_ptr as *mut u8, DISASM_LEN);
 
         // SAFETY: this does not alter program behavior or cause UB.
         let prot_guard = unsafe {
@@ -112,7 +120,7 @@ where
         let prologue = Prologue::analyze(ptr.addr(), &prologue_bytes)?;
 
         // SAFETY: upheld by caller.
-        let installer = match unsafe { install_fast(target, &mut context, &prologue) } {
+        let installer = match unsafe { install_fast(target_ptr, &mut context, &prologue) } {
             Ok(installer) => installer,
             Err(InstallError::TryAgain) => continue,
             Err(InstallError::Error(e)) => return Err(e),
@@ -121,12 +129,15 @@ where
         // SAFETY: upheld by caller.
         let installer = match installer {
             Some(installer) => installer,
-            None => match unsafe { install_slow(target, &mut context, &prologue) } {
+            None => match unsafe { install_slow(target_ptr, &mut context, &prologue) } {
                 Ok(installer) => installer,
                 Err(InstallError::TryAgain) => continue,
                 Err(InstallError::Error(e)) => return Err(e),
             },
         };
+
+        // SAFETY: just created a thunk and a trampoline for a function type T.
+        let installer = unsafe { installer.downcast::<T>() };
 
         // Globally register this target as already hooked.
         // All future calls to `install` with this target will return this thunk.
@@ -142,14 +153,11 @@ where
     }
 }
 
-unsafe fn install_fast<T>(
-    target: T,
+unsafe fn install_fast(
+    target: *const (),
     context: &mut ProcessContext,
-    prologue: &Prologue<'_, T>,
-) -> ::std::result::Result<Option<Installer<T>>, InstallError>
-where
-    T: FnPtr + 'static,
-{
+    prologue: &Prologue<'_>,
+) -> ::std::result::Result<Option<ErasedInstaller>, InstallError> {
     // Calculate the short (that is, replacing only the first instruction's bytes)
     // E9 JMP addressable memory range.
     let first_len = prologue.insns[0].len();
@@ -161,7 +169,7 @@ where
             return Ok(None);
         } else {
             // It was long enough and the allocation failed, there's nothing to do.
-            return Err(E::oom(target.to_ptr().addr()).into());
+            return Err(E::oom(target.addr()).into());
         }
     };
 
@@ -171,24 +179,21 @@ where
         return Err(InstallError::TryAgain);
     }
 
-    Ok(Some(Installer {
+    Ok(Some(ErasedInstaller {
         target,
         thunk: jmp_chain.thunk,
     }))
 }
 
 #[cold]
-unsafe fn install_slow<T>(
-    target: T,
+unsafe fn install_slow(
+    target: *const (),
     context: &mut ProcessContext,
-    prologue: &Prologue<'_, T>,
-) -> ::std::result::Result<Installer<T>, InstallError>
-where
-    T: FnPtr + 'static,
-{
+    prologue: &Prologue<'_>,
+) -> ::std::result::Result<ErasedInstaller, InstallError> {
     // Full E9 JMP addressable memory range.
     let Some(mut jmp_chain) = JmpChain::build(target, context, prologue, JmpRel::RANGE)? else {
-        return Err(E::oom(target.to_ptr().addr()).into());
+        return Err(E::oom(target.addr()).into());
     };
 
     // Suspend all threads, do IP relocations if needed, and atomically overwrite
@@ -198,31 +203,27 @@ where
         return Err(e);
     }
 
-    Ok(Installer {
+    Ok(ErasedInstaller {
         target,
         thunk: jmp_chain.thunk,
     })
 }
 
-impl<'a, T> JmpChain<'a, T>
-where
-    T: FnPtr + 'static,
-{
+impl<'a> JmpChain<'a> {
     fn build(
-        target: T,
+        target: *const (),
         context: &'a mut ProcessContext,
-        prologue: &Prologue<'_, T>,
-        jmp_rel_range: impl RangeBounds<isize> + Clone,
+        prologue: &Prologue<'_>,
+        jmp_rel_range: RangeInclusive<isize>,
     ) -> Result<Option<Self>> {
         let alloc = context.bounded_range_alloc();
 
-        let jmp_rel_ptr = target.to_ptr();
-        let Some(jmp_abs) = alloc.os_alloc_near::<JmpAbs>(jmp_rel_ptr, jmp_rel_range)? else {
+        let Some(jmp_abs) = alloc.os_alloc_near::<JmpAbs>(target, jmp_rel_range)? else {
             return Ok(None);
         };
 
         let jmp_abs_ptr = jmp_abs.as_ptr() as *const ();
-        let thunk = match alloc.os_alloc_near::<AtomicFnPtr<T>>(jmp_abs_ptr, JmpAbs::RANGE) {
+        let thunk = match alloc.os_alloc_near::<AtomicErasedFnPtr>(jmp_abs_ptr, JmpAbs::RANGE) {
             Ok(Some(thunk)) => thunk,
             err => {
                 alloc.reclaim(jmp_abs);
@@ -240,9 +241,9 @@ where
             }
         };
 
-        let thunk = thunk.write(AtomicFnPtr::new(relocated.trampoline));
+        let thunk = thunk.write(AtomicErasedFnPtr::new(relocated.trampoline_ptr));
         let jmp_abs = jmp_abs.write(JmpAbs::encode(jmp_abs, thunk));
-        let jmp_rel = JmpRel::encode(target.to_ptr(), jmp_abs);
+        let jmp_rel = JmpRel::encode(target, jmp_abs);
 
         Ok(Some(Self {
             context,
@@ -265,7 +266,7 @@ where
 
 impl JmpRel {
     const LEN: usize = size_of::<Self>();
-    const RANGE: (Bound<isize>, Bound<isize>) = disp32_range(Self::LEN);
+    const RANGE: RangeInclusive<isize> = disp32_range(Self::LEN);
 
     fn new(disp: i32) -> Self {
         Self { opcode: 0xe9, disp }
@@ -281,10 +282,7 @@ impl JmpRel {
         unsafe { mem::transmute::<&Self, &[u8; size_of::<Self>()]>(self) }
     }
 
-    fn short_encoding_range(
-        bytes: &[u8; DISASM_LEN],
-        len: usize,
-    ) -> impl RangeBounds<isize> + Clone {
+    fn short_encoding_range(bytes: &[u8; DISASM_LEN], len: usize) -> RangeInclusive<isize> {
         assert!(len > 0, "must be at least 1 byte long");
 
         let mut min_disp32_bytes = i32::MIN.to_le_bytes();
@@ -299,13 +297,16 @@ impl JmpRel {
         let min = i32::from_le_bytes(min_disp32_bytes) as isize + JmpRel::LEN as isize;
         let max = i32::from_le_bytes(max_disp32_bytes) as isize + JmpRel::LEN as isize;
 
-        min..=max
+        RangeInclusive {
+            start: min,
+            last: max,
+        }
     }
 }
 
 impl JmpAbs {
     const LEN: usize = size_of::<Self>();
-    const RANGE: (Bound<isize>, Bound<isize>) = disp32_range(Self::LEN);
+    const RANGE: RangeInclusive<isize> = disp32_range(Self::LEN);
 
     fn new(disp: i32) -> Self {
         Self {
@@ -327,11 +328,29 @@ fn disp32_between(ip: usize, target: usize) -> i32 {
     i32::try_from(target as isize - ip as isize).expect("pointer is not in range")
 }
 
-const fn disp32_range(insn_len: usize) -> (Bound<isize>, Bound<isize>) {
-    (
-        Bound::Included(i32::MIN as isize + insn_len as isize),
-        Bound::Included(i32::MAX as isize + insn_len as isize),
-    )
+const fn disp32_range(insn_len: usize) -> RangeInclusive<isize> {
+    RangeInclusive {
+        start: i32::MIN as isize + insn_len as isize,
+        last: i32::MAX as isize + insn_len as isize,
+    }
+}
+
+impl ErasedInstaller {
+    /// # Safety
+    ///
+    /// T must be the exact type the installer was created for.
+    unsafe fn downcast<T>(self) -> Installer<T>
+    where
+        T: FnPtr + 'static,
+    {
+        // SAFETY: upheld by caller.
+        unsafe {
+            Installer {
+                target: T::from_ptr(self.target),
+                thunk: self.thunk.downcast(),
+            }
+        }
+    }
 }
 
 trait BoundedRangeAllocatorExt {

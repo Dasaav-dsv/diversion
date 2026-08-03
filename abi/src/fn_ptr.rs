@@ -94,9 +94,15 @@ where
 }
 
 impl AtomicErasedFnPtr {
+    #[inline]
+    pub fn new(ptr: *const ()) -> Self {
+        Self(AtomicPtr::new(ptr.cast_mut()))
+    }
+
     /// # Safety
     ///
-    /// `F` must be the type that was erased in [`AtomicFnPtr::erased`].
+    /// `F` must match the type of the pointed to function.
+    #[inline]
     pub unsafe fn downcast<F>(&self) -> &AtomicFnPtr<F> {
         // SAFETY: transmuting between two valid `repr(transparent)` wrappers.
         unsafe { mem::transmute::<&Self, &AtomicFnPtr<F>>(self) }
