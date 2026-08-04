@@ -2,7 +2,7 @@
 
 use std::{
     debug_assert_matches,
-    mem::{self, MaybeUninit},
+    mem::{self, MaybeUninit, offset_of},
     ops::RangeBounds,
     ptr,
     range::RangeInclusive,
@@ -44,11 +44,18 @@ const DISASM_LEN: usize = JmpRel::LEN - 1 + MAX_INSN_LEN;
 #[derive(Debug)]
 struct JmpChain<'a> {
     context: &'a mut ProcessContext,
-    thunk: &'static mut AtomicErasedFnPtr,
-    jmp_abs: &'static mut JmpAbs,
+    thunk: &'static mut Thunk,
     jmp_rel: JmpRel,
     trampoline_bytes: &'static mut [u8],
     relocs: Vec<IpReloc>,
+}
+
+#[derive(Debug)]
+#[repr(C)]
+struct Thunk {
+    jmp_abs: JmpAbs,
+    ud2: [u8; 2],
+    ptr: AtomicErasedFnPtr,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -177,7 +184,7 @@ unsafe fn install_fast(
 
     Ok(Some(ErasedInstaller {
         target,
-        thunk: jmp_chain.thunk,
+        thunk: &mut jmp_chain.thunk.ptr,
     }))
 }
 
@@ -201,7 +208,7 @@ unsafe fn install_slow(
 
     Ok(ErasedInstaller {
         target,
-        thunk: jmp_chain.thunk,
+        thunk: &mut jmp_chain.thunk.ptr,
     })
 }
 
@@ -214,37 +221,24 @@ impl<'a> JmpChain<'a> {
     ) -> Result<Option<Self>> {
         let alloc = context.bounded_range_alloc();
 
-        let Some(jmp_abs) = alloc.os_alloc_near::<JmpAbs>(target, jmp_rel_range)? else {
+        let Some(thunk) = alloc.os_alloc_near::<Thunk>(target, jmp_rel_range)? else {
             return Ok(None);
-        };
-
-        let jmp_abs_ptr = jmp_abs.as_ptr() as *const ();
-        let thunk = match alloc.os_alloc_near::<AtomicErasedFnPtr>(jmp_abs_ptr, JmpAbs::RANGE) {
-            Ok(Some(thunk)) => thunk,
-            err => {
-                alloc.reclaim(jmp_abs);
-                err?;
-                return Err(E::oom(jmp_abs_ptr.addr()));
-            }
         };
 
         let relocated = match prologue.relocate(alloc) {
             Ok(relocated) => relocated,
             Err(e) => {
                 alloc.reclaim(thunk);
-                alloc.reclaim(jmp_abs);
                 return Err(e);
             }
         };
 
-        let thunk = thunk.write(AtomicErasedFnPtr::new(relocated.trampoline_ptr));
-        let jmp_abs = jmp_abs.write(JmpAbs::encode(jmp_abs, thunk));
-        let jmp_rel = JmpRel::encode(target, jmp_abs);
+        let thunk = thunk.write(Thunk::new(relocated.trampoline_ptr));
+        let jmp_rel = JmpRel::encode(target, thunk);
 
         Ok(Some(Self {
             context,
             thunk,
-            jmp_abs,
             jmp_rel,
             trampoline_bytes: relocated.bytes,
             relocs: relocated.relocs,
@@ -256,7 +250,20 @@ impl<'a> JmpChain<'a> {
         let alloc = self.context.bounded_range_alloc();
         alloc.reclaim(self.trampoline_bytes);
         alloc.reclaim(self.thunk);
-        alloc.reclaim(self.jmp_abs);
+    }
+}
+
+impl Thunk {
+    fn new(ptr: *const ()) -> Self {
+        let disp32 = const {
+            offset_of!(Self, ptr) as i32 - (offset_of!(Self, jmp_abs) + JmpAbs::LEN) as i32
+        };
+
+        Self {
+            jmp_abs: JmpAbs::new(disp32),
+            ud2: [0x0f, 0x0b],
+            ptr: AtomicErasedFnPtr::new(ptr),
+        }
     }
 }
 
@@ -278,20 +285,21 @@ impl JmpRel {
         unsafe { mem::transmute::<&Self, &[u8; size_of::<Self>()]>(self) }
     }
 
+    #[track_caller]
     fn short_encoding_range(bytes: &[u8; DISASM_LEN], len: usize) -> RangeInclusive<isize> {
         assert!(len > 0, "must be at least 1 byte long");
 
         let mut min_disp32_bytes = i32::MIN.to_le_bytes();
         let mut max_disp32_bytes = i32::MAX.to_le_bytes();
 
-        for i in len..JmpRel::LEN {
+        for i in len..Self::LEN {
             let byte = bytes[i];
             min_disp32_bytes[i - 1] = byte;
             max_disp32_bytes[i - 1] = byte;
         }
 
-        let min = i32::from_le_bytes(min_disp32_bytes) as isize + JmpRel::LEN as isize;
-        let max = i32::from_le_bytes(max_disp32_bytes) as isize + JmpRel::LEN as isize;
+        let min = i32::from_le_bytes(min_disp32_bytes) as isize + Self::LEN as isize;
+        let max = i32::from_le_bytes(max_disp32_bytes) as isize + Self::LEN as isize;
 
         RangeInclusive {
             start: min,
@@ -302,7 +310,6 @@ impl JmpRel {
 
 impl JmpAbs {
     const LEN: usize = size_of::<Self>();
-    const RANGE: RangeInclusive<isize> = disp32_range(Self::LEN);
 
     fn new(disp: i32) -> Self {
         Self {
@@ -310,12 +317,6 @@ impl JmpAbs {
             modrm: 0x25,
             disp,
         }
-    }
-
-    #[track_caller]
-    fn encode<Ip: ?Sized, Tgt: ?Sized>(ip: *const Ip, target: *const Tgt) -> Self {
-        let disp = disp32_between(ip.addr() + size_of::<Self>(), target.addr());
-        Self::new(disp)
     }
 }
 
