@@ -26,13 +26,13 @@ use crate::{
                 memory::{Protection, Region},
                 thread::IpReloc,
             },
-            x86_64::prologue::Prologue,
+            x86_64::hook_site::HookSite,
         },
     },
 };
 
+mod hook_site;
 mod intrinsics;
-mod prologue;
 
 /// Longest valid instruction encoding on x86.
 const MAX_INSN_LEN: usize = 15;
@@ -114,16 +114,16 @@ where
         };
 
         // SAFETY: `Protection::make_rwx` succeeded so this pointer is safe to read for sure.
-        let prologue_bytes = unsafe {
+        let site_bytes = unsafe {
             let mut bytes = [0; DISASM_LEN];
             bytes.atomic_copy_from_ptr(ptr, Ordering::Acquire, Ordering::SeqCst);
             bytes
         };
 
-        let prologue = Prologue::analyze(ptr.addr(), &prologue_bytes)?;
+        let site = HookSite::analyze(ptr.addr(), &site_bytes)?;
 
         // SAFETY: upheld by caller.
-        let installer = match unsafe { install_fast(target_ptr, &mut context, &prologue) } {
+        let installer = match unsafe { install_fast(target_ptr, &mut context, &site) } {
             Ok(installer) => installer,
             Err(InstallError::TryAgain) => continue,
             Err(InstallError::Error(e)) => return Err(e),
@@ -132,7 +132,7 @@ where
         // SAFETY: upheld by caller.
         let installer = match installer {
             Some(installer) => installer,
-            None => match unsafe { install_slow(target_ptr, &mut context, &prologue) } {
+            None => match unsafe { install_slow(target_ptr, &mut context, &site) } {
                 Ok(installer) => installer,
                 Err(InstallError::TryAgain) => continue,
                 Err(InstallError::Error(e)) => return Err(e),
@@ -159,14 +159,14 @@ where
 unsafe fn install_fast(
     target: *const (),
     context: &mut ProcessContext,
-    prologue: &Prologue<'_>,
+    site: &HookSite<'_>,
 ) -> ::std::result::Result<Option<ErasedInstaller>, InstallError> {
     // Calculate the short (that is, replacing only the first instruction's bytes)
     // E9 JMP addressable memory range.
-    let first_len = prologue.insns[0].len();
-    let range = JmpRel::short_encoding_range(prologue.bytes, first_len);
+    let first_len = site.insns[0].len();
+    let range = JmpRel::short_encoding_range(site.bytes, first_len);
 
-    let Some(jmp_chain) = JmpChain::build(target, context, prologue, range)? else {
+    let Some(jmp_chain) = JmpChain::build(target, context, site, range)? else {
         if first_len < JmpRel::LEN {
             // If the first instruction couldn't fit the JMP try `install_slow`.
             return Ok(None);
@@ -177,7 +177,7 @@ unsafe fn install_fast(
     };
 
     // Try atomically overwriting the first instruction with a shortened relative jump.
-    if unsafe { !prologue.detour(target, jmp_chain.jmp_rel) } {
+    if unsafe { !site.detour(target, jmp_chain.jmp_rel) } {
         jmp_chain.reclaim();
         return Err(InstallError::TryAgain);
     }
@@ -192,16 +192,16 @@ unsafe fn install_fast(
 unsafe fn install_slow(
     target: *const (),
     context: &mut ProcessContext,
-    prologue: &Prologue<'_>,
+    site: &HookSite<'_>,
 ) -> ::std::result::Result<ErasedInstaller, InstallError> {
     // Full E9 JMP addressable memory range.
-    let Some(mut jmp_chain) = JmpChain::build(target, context, prologue, JmpRel::RANGE)? else {
+    let Some(mut jmp_chain) = JmpChain::build(target, context, site, JmpRel::RANGE)? else {
         return Err(E::oom(target.addr()).into());
     };
 
     // Suspend all threads, do IP relocations if needed, and atomically overwrite
-    // the first 5 bytes of the prologue with a full-length relative jump.
-    if let Err(e) = unsafe { prologue.suspend_and_detour(target, &mut jmp_chain) } {
+    // the first 5 bytes of the hook site with a full-length relative jump.
+    if let Err(e) = unsafe { site.suspend_and_detour(target, &mut jmp_chain) } {
         jmp_chain.reclaim();
         return Err(e);
     }
@@ -216,7 +216,7 @@ impl<'a> JmpChain<'a> {
     fn build(
         target: *const (),
         context: &'a mut ProcessContext,
-        prologue: &Prologue<'_>,
+        site: &HookSite<'_>,
         jmp_rel_range: RangeInclusive<isize>,
     ) -> Result<Option<Self>> {
         let alloc = context.bounded_range_alloc();
@@ -225,7 +225,7 @@ impl<'a> JmpChain<'a> {
             return Ok(None);
         };
 
-        let relocated = match prologue.relocate(alloc) {
+        let relocated = match site.relocate(alloc) {
             Ok(relocated) => relocated,
             Err(e) => {
                 alloc.reclaim(thunk);

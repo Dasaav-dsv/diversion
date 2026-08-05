@@ -19,7 +19,7 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub struct Prologue<'a> {
+pub struct HookSite<'a> {
     pub bytes: &'a [u8; DISASM_LEN],
     pub insns: Vec<Instruction>,
     min_rel_addr: usize,
@@ -39,11 +39,11 @@ pub struct Trampoline {
 /// The allocator will reclaim any unused bytes after the actual length is determined.
 const RELOC_BUF_LEN: usize = 1024;
 
-impl<'a> Prologue<'a> {
+impl<'a> HookSite<'a> {
     pub fn analyze(target_addr: usize, bytes: &'a [u8; DISASM_LEN]) -> Result<Self> {
         let insns = decode_instructions(target_addr, bytes)?;
 
-        let mut prologue = Self {
+        let mut site = Self {
             bytes,
             insns,
 
@@ -59,7 +59,7 @@ impl<'a> Prologue<'a> {
         let mut min_count = 0;
         let mut will_branch = false;
 
-        for insn in prologue.insns.iter().take_while(|insn| !insn.is_invalid()) {
+        for insn in site.insns.iter().take_while(|insn| !insn.is_invalid()) {
             if min_len >= JmpRel::LEN {
                 // Break if we decoded enough to insert the jump and relocate.
                 break;
@@ -86,34 +86,34 @@ impl<'a> Prologue<'a> {
             if insn.is_ip_rel_memory_operand() {
                 let rel_addr = insn.ip_rel_memory_address() as usize;
 
-                prologue.min_rel_addr = prologue.min_rel_addr.min(rel_addr);
-                prologue.max_rel_addr = prologue.max_rel_addr.max(rel_addr);
+                site.min_rel_addr = site.min_rel_addr.min(rel_addr);
+                site.max_rel_addr = site.max_rel_addr.max(rel_addr);
             }
         }
 
         if min_len < JmpRel::LEN {
             // It's not possible to safely insert a 5-byte JMP here.
             return Err(E::TooShort {
-                addr: prologue.target_addr,
+                addr: site.target_addr,
                 bytes: *bytes[..16].as_array().unwrap(),
             });
         }
 
-        prologue.insns.truncate(min_count);
-        let last = prologue.insns.last().expect("has >= 1 instructions");
+        site.insns.truncate(min_count);
+        let last = site.insns.last().expect("has >= 1 instructions");
 
         // Unconditionally append a jump back (even if control flow doesn't fall through).
         let trampoline_target = last.next_ip();
-        prologue.trampoline_target_addr = trampoline_target as usize;
+        site.trampoline_target_addr = trampoline_target as usize;
 
         // Inserting an IP-relative instruction.
-        prologue.min_rel_addr = prologue.min_rel_addr.min(prologue.trampoline_target_addr);
-        prologue.max_rel_addr = prologue.max_rel_addr.max(prologue.trampoline_target_addr);
+        site.min_rel_addr = site.min_rel_addr.min(site.trampoline_target_addr);
+        site.max_rel_addr = site.max_rel_addr.max(site.trampoline_target_addr);
 
         let jmp_back = Instruction::with_branch(Code::Jmp_rel32_64, trampoline_target).unwrap();
-        prologue.insns.push(jmp_back);
+        site.insns.push(jmp_back);
 
-        Ok(prologue)
+        Ok(site)
     }
 
     pub fn relocate(&self, alloc: &mut BoundedRangeAllocator) -> Result<Trampoline> {
@@ -314,7 +314,7 @@ mod tests {
 
     use crate::installer::arch::x86_64::{
         DISASM_LEN,
-        prologue::{Prologue, RELOC_BUF_LEN},
+        hook_site::{HookSite, RELOC_BUF_LEN},
     };
 
     #[test]
@@ -346,7 +346,7 @@ mod tests {
 
     #[test]
     fn no_prologue_ret_no_padding() {
-        Prologue::analyze(0x1000, &[0xc3; _]).unwrap_err();
+        HookSite::analyze(0x1000, &[0xc3; _]).unwrap_err();
     }
 
     fn analyze_and_reencode(bytes: &[u8]) {
@@ -356,7 +356,7 @@ mod tests {
         let min = bytes.len().min(input.len());
         input[..min].copy_from_slice(&bytes[..min]);
 
-        let prologue = Prologue::analyze(input.as_ptr().addr(), &input).unwrap();
-        prologue.encode_out(&mut output).unwrap();
+        let site = HookSite::analyze(input.as_ptr().addr(), &input).unwrap();
+        site.encode_out(&mut output).unwrap();
     }
 }
