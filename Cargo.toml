@@ -31,7 +31,9 @@ thiserror = "2.0.18"
 libc = { workspace = true, optional = true }
 
 [features]
-default = ["installer"]
+# TODO: remove custom_cc from default features
+default = ["installer", "custom_cc"]
+custom_cc = ["installer"]
 installer = ["diversion-abi/process_ctx", "dep:bump-into", "dep:libc"]
 parking_lot = ["diversion-abi/parking_lot"]
 bare_hrtb = ["closure-ffi/proc_macros"]

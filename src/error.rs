@@ -13,12 +13,12 @@ pub enum Error {
     Protection { addr: usize, err: io::Error },
 
     #[error(
-        "failed to disassemble function prologue at {addr:x} ({bytes:x?}): all instructions failed to decode"
+        "failed to disassemble function at {addr:x} ({bytes:x?}): all instructions failed to decode"
     )]
     Disassembly { addr: usize, bytes: [u8; 16] },
 
     #[error(
-        "failed to disassemble function prologue at {addr:x} ({bytes:x?}): function is too short to hook safely"
+        "failed to disassemble function at {addr:x} ({bytes:x?}): function is too short to hook safely"
     )]
     TooShort { addr: usize, bytes: [u8; 16] },
 

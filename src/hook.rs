@@ -6,6 +6,7 @@ use std::{
 
 use closure_ffi::traits::FnPtr;
 
+pub mod custom;
 pub mod leak;
 pub mod scoped;
 pub mod temp;

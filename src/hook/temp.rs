@@ -206,7 +206,7 @@ where
     /// # Safety
     ///
     /// The invariants of the hooked function must be preserved when calling this.
-    #[inline(always)]
+    #[inline]
     pub unsafe fn call_original<'a, 'b, 'c>(
         &self,
         args: T::Args<'a, 'b, 'c>,

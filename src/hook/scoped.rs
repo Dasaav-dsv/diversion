@@ -225,7 +225,7 @@ where
         }
     }
 
-    #[inline(always)]
+    #[inline]
     unsafe fn call<'a, 'b, 'c>(&self, args: T::Args<'a, 'b, 'c>) -> T::Ret<'a, 'b, 'c> {
         unsafe { (T::CC::default(), &self.hook).call(args) }
     }
@@ -246,7 +246,7 @@ where
         }
     }
 
-    #[inline(always)]
+    #[inline]
     unsafe fn call<'a, 'b, 'c>(&self, args: T::Args<'a, 'b, 'c>) -> T::Ret<'a, 'b, 'c> {
         unsafe { (T::CC::default(), &mut *self.hook.lock()).call_mut(args) }
     }
@@ -268,7 +268,7 @@ where
         }
     }
 
-    #[inline(always)]
+    #[inline]
     unsafe fn call<'a, 'b, 'c>(&self, args: T::Args<'a, 'b, 'c>) -> T::Ret<'a, 'b, 'c> {
         unsafe {
             if self.flag.load(Ordering::Acquire)
