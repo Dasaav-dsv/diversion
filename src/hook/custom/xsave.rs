@@ -1,6 +1,6 @@
 #![cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 #[cfg(target_arch = "x86")]
 use std::arch::x86 as arch;
@@ -12,6 +12,7 @@ pub const XSTATE_BV_SSE: u64 = 0b00000010;
 pub const XSTATE_BV_AVX: u64 = 0b00000100;
 pub const XSTATE_BV_AVX512: u64 = 0b11100000;
 
+pub(super) static XSAVE_AVX_SIZE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum XSaveSupports {
@@ -113,8 +114,11 @@ impl XsaveAvxCpuid {
         if size == 0 {
             // leaf 0DH (XSAVE components), subleaf 2 (user state component 2 (AVX)).
             let cpuid = arch::__cpuid_count(0x0d, 2);
+
             EBX.store(cpuid.ebx, Ordering::Release);
             EAX.store(cpuid.eax, Ordering::Release);
+            XSAVE_AVX_SIZE.store((cpuid.ebx + cpuid.eax) as u64, Ordering::SeqCst);
+
             size = cpuid.eax;
         }
 
