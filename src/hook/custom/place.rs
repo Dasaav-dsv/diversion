@@ -172,4 +172,10 @@ impl_with_resolved! {
     h: H,
     i: I,
     j: J,
+    k: K,
+    l: L,
+    m: M,
+    n: N,
+    o: O,
+    p: P,
 }
