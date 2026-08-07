@@ -6,7 +6,7 @@ use std::{
 
 use crate::hook::custom::{
     place::{Place, Ref, ResolvePlace, TrivialPlace, UnalignedRef},
-    x86_64::{Context, RawContext},
+    x86_64::Context,
 };
 
 #[doc(hidden)]
@@ -33,19 +33,17 @@ pub struct Zmm<const N: usize>(NonNull<Context>);
 #[repr(transparent)]
 pub struct Kmask<const N: usize>(NonNull<u64>);
 
-impl ResolvePlace<Context> for *const RawContext {
-    #[inline]
-    fn resolve(src: &Context) -> Self {
-        src.raw
-    }
-}
+#[allow(non_camel_case_types)]
+type r80 = [u8; 10];
 
-impl ResolvePlace<Context> for *mut RawContext {
-    #[inline]
-    fn resolve(src: &Context) -> Self {
-        src.raw
-    }
-}
+#[allow(non_camel_case_types)]
+type r128 = [u8; 16];
+
+#[allow(non_camel_case_types)]
+type r256 = [u8; 32];
+
+#[allow(non_camel_case_types)]
+type r512 = [u8; 64];
 
 impl<T, U, const N: usize> Place<T> for Gpr<U, N>
 where
@@ -74,7 +72,7 @@ impl<T, const N: usize> ResolvePlace<Context> for Gpr<T, N> {
             assert!(N < 16, "register must be defined");
         }
         unsafe {
-            let regs = &raw mut (*src.raw).regs;
+            let regs = &raw mut (*src.legacy).regs;
             Self(NonNull::new_unchecked(
                 regs.cast::<u64>().add(N).cast::<T>(),
             ))
@@ -125,7 +123,7 @@ impl<const N: usize> ResolvePlace<Context> for St<N> {
             assert!(N < 8, "register must be defined");
         }
         unsafe {
-            let x87 = &raw mut (*src.raw).xsave.legacy.x87_regs;
+            let x87 = &raw mut (*src.legacy).xsave.legacy.x87_regs;
             Self(NonNull::new_unchecked(x87.cast::<r128>().add(N).cast()))
         }
     }
@@ -154,7 +152,7 @@ impl<const N: usize> ResolvePlace<Context> for Xmm<N> {
             assert!(N < 16, "register must be defined");
         }
         unsafe {
-            let xmm = &raw mut (*src.raw).xsave.legacy.xmm_regs;
+            let xmm = &raw mut (*src.legacy).xsave.legacy.xmm_regs;
             Self(NonNull::new_unchecked(xmm.cast::<r128>().add(N)))
         }
     }
@@ -181,7 +179,7 @@ impl<const N: usize> Place<r256> for Ymm<N> {
     unsafe fn read(&self) -> r256 {
         unsafe {
             let context = self.0.as_ref();
-            let lo = &raw const (*context.raw).xsave.legacy.xmm_regs;
+            let lo = &raw const (*context.legacy).xsave.legacy.xmm_regs;
 
             debug_assert!(!context.avx.is_null(), "AVX instruction set is undefined");
             let hi = &raw const (*context.avx).ymm_h_regs;
@@ -199,7 +197,7 @@ impl<const N: usize> Place<r256> for Ymm<N> {
     unsafe fn write(&mut self, value: r256) {
         unsafe {
             let context = self.0.as_ref();
-            let lo = &raw mut (*context.raw).xsave.legacy.xmm_regs;
+            let lo = &raw mut (*context.legacy).xsave.legacy.xmm_regs;
 
             debug_assert!(!context.avx.is_null(), "AVX instruction set is undefined");
             let hi = &raw mut (*context.avx).ymm_h_regs;
@@ -237,7 +235,7 @@ impl<const N: usize> Place<r512> for Zmm<N> {
                 let zmm_hi = &raw const (*context.avx512).zmm_16_31.zmm_regs;
                 *zmm_hi.cast::<r512>().add(N - 16)
             } else {
-                let lo = &raw const (*context.raw).xsave.legacy.xmm_regs;
+                let lo = &raw const (*context.legacy).xsave.legacy.xmm_regs;
                 let hi_ymm = &raw const (*context.avx).ymm_h_regs;
                 let hi_zmm = &raw const (*context.avx512).zmm_0_15h.zmm_h_regs;
 
@@ -266,7 +264,7 @@ impl<const N: usize> Place<r512> for Zmm<N> {
                 let zmm_hi = &raw mut (*context.avx512).zmm_16_31.zmm_regs;
                 *zmm_hi.cast::<r512>().add(N - 16) = value;
             } else {
-                let lo = &raw mut (*context.raw).xsave.legacy.xmm_regs;
+                let lo = &raw mut (*context.legacy).xsave.legacy.xmm_regs;
                 let hi_ymm = &raw mut (*context.avx).ymm_h_regs;
                 let hi_zmm = &raw mut (*context.avx512).zmm_0_15h.zmm_h_regs;
 
@@ -317,15 +315,6 @@ impl<const N: usize> ResolvePlace<Context> for Kmask<N> {
         }
     }
 }
-
-#[allow(non_camel_case_types)]
-type r80 = [u8; 10];
-#[allow(non_camel_case_types)]
-type r128 = [u8; 16];
-#[allow(non_camel_case_types)]
-type r256 = [u8; 32];
-#[allow(non_camel_case_types)]
-type r512 = [u8; 64];
 
 pub(super) mod defs {
     pub use super::*;

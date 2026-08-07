@@ -1,6 +1,9 @@
 #![cfg(target_arch = "x86_64")]
 
-use crate::hook::custom::xsave::{XSaveArea, XSaveAvx, XSaveAvx512};
+use crate::hook::custom::{
+    place::ResolvePlace,
+    xsave::{XSaveArea, XSaveAvx, XSaveAvx512},
+};
 
 pub mod register;
 
@@ -8,18 +11,60 @@ pub use register::defs::*;
 
 #[derive(Debug)]
 pub struct Context {
-    raw: *mut RawContext,
+    legacy: *mut Legacy,
     avx: *mut XSaveAvx,
     avx512: *mut XSaveAvx512,
 }
 
 #[derive(Clone, Debug)]
 #[repr(C)]
-pub struct RawContext {
+pub struct Legacy {
     pub eflags: u32,
-    _pad04: u32,
+    _reserved04: u32,
     pub regs: [u64; 16],
     pub xsave: XSaveArea,
+}
+
+impl ResolvePlace<Context> for *const Legacy {
+    #[inline]
+    fn resolve(src: &Context) -> Self {
+        src.legacy
+    }
+}
+
+impl ResolvePlace<Context> for *mut Legacy {
+    #[inline]
+    fn resolve(src: &Context) -> Self {
+        src.legacy
+    }
+}
+
+impl ResolvePlace<Context> for *const XSaveAvx {
+    #[inline]
+    fn resolve(src: &Context) -> Self {
+        src.avx
+    }
+}
+
+impl ResolvePlace<Context> for *mut XSaveAvx {
+    #[inline]
+    fn resolve(src: &Context) -> Self {
+        src.avx
+    }
+}
+
+impl ResolvePlace<Context> for *const XSaveAvx512 {
+    #[inline]
+    fn resolve(src: &Context) -> Self {
+        src.avx512
+    }
+}
+
+impl ResolvePlace<Context> for *mut XSaveAvx512 {
+    #[inline]
+    fn resolve(src: &Context) -> Self {
+        src.avx512
+    }
 }
 
 #[cfg(test)]
@@ -28,7 +73,7 @@ mod tests {
 
     use crate::hook::custom::{
         place::{Place, WithResolved},
-        x86_64::{Bl, Context, Dx, Ecx, RawContext, Rax, Rdi, Rdx, Rsi, Stack},
+        x86_64::{Bl, Context, Dx, Ecx, Legacy, Rax, Rdi, Rdx, Rsi, Stack},
     };
 
     #[test]
@@ -83,18 +128,18 @@ mod tests {
     }
 
     #[track_caller]
-    fn with_resolved<T>(context: &mut RawContext, f: impl WithResolved<Context, T>) {
+    fn with_resolved<T>(context: &mut Legacy, f: impl WithResolved<Context, T>) {
         f.call_with_resolved(Context {
-            raw: context,
+            legacy: context,
             avx: ptr::null_mut(),
             avx512: ptr::null_mut(),
         });
     }
 
-    fn raw_context() -> RawContext {
-        RawContext {
+    fn raw_context() -> Legacy {
+        Legacy {
             eflags: 0,
-            _pad04: 0,
+            _reserved04: 0,
             regs: array::from_fn(|i| i as u64),
             xsave: unsafe { mem::zeroed() },
         }

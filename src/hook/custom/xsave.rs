@@ -2,14 +2,16 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-cfg_select! {
-    target_arch = "x86" => {
-        use std::arch::x86 as arch;
-    },
-    target_arch = "x86_64" => {
-        use std::arch::x86_64 as arch;
-    },
-}
+#[cfg(target_arch = "x86")]
+use std::arch::x86 as arch;
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64 as arch;
+
+pub const XSTATE_BV_X87: u64 = 0b00000001;
+pub const XSTATE_BV_SSE: u64 = 0b00000010;
+pub const XSTATE_BV_AVX: u64 = 0b00000100;
+pub const XSTATE_BV_AVX512: u64 = 0b11100000;
+
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum XSaveSupports {
@@ -86,9 +88,9 @@ impl XSaveSupports {
     #[target_feature(enable = "xsave")]
     pub fn system() -> Self {
         let xcr0 = unsafe { arch::_xgetbv(0) };
-        if xcr0 & 0b11100000 != 0 {
+        if xcr0 & XSTATE_BV_AVX512 != 0 {
             Self::Avx512
-        } else if xcr0 & 0b00000100 != 0 {
+        } else if xcr0 & XSTATE_BV_AVX != 0 {
             Self::Avx
         } else {
             Self::Sse
