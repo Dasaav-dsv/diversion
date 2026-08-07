@@ -1,9 +1,6 @@
 #![cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 
-use std::{
-    mem::MaybeUninit,
-    sync::atomic::{AtomicU32, Ordering},
-};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 cfg_select! {
     target_arch = "x86" => {
@@ -22,33 +19,14 @@ pub enum XSaveSupports {
     Avx512,
 }
 
+#[derive(Clone, Debug)]
 #[repr(C)]
 pub struct XSaveArea {
     pub legacy: XSaveLegacy,
     pub header: XSaveHeader,
 }
 
-#[repr(C)]
-pub struct XSaveStandardAvx {
-    pub area: XSaveArea,
-    avx: MaybeUninit<XSaveAvx>,
-}
-
-#[repr(C)]
-pub struct XSaveCompactAvx {
-    pub area: XSaveArea,
-    pub avx: XSaveAvx,
-}
-
-#[repr(C)]
-pub struct XSaveCompactAvx512 {
-    pub area: XSaveArea,
-    pub avx: XSaveAvx,
-    pub avx512_kmasks: XSaveAvx512Kmasks,
-    pub avx512: XSaveAvx512,
-    pub avx512_hi16: XSaveAvx512Hi16,
-}
-
+#[derive(Clone, Debug)]
 #[repr(C)]
 pub struct XSaveLegacy {
     pub fcw: u16,
@@ -69,6 +47,7 @@ pub struct XSaveLegacy {
     _reserved1a0: [u8; 96],
 }
 
+#[derive(Clone, Debug)]
 #[repr(C)]
 pub struct XSaveHeader {
     pub xstate_bv: u64,
@@ -82,17 +61,24 @@ pub struct XSaveAvx {
 }
 
 #[repr(C)]
+pub struct XSaveAvx512 {
+    pub kmasks: XSaveAvx512Kmasks,
+    pub zmm_0_15h: XSaveAvx512Zmm0_15h,
+    pub zmm_16_31: XSaveAvx512Zmm15_31,
+}
+
+#[repr(C)]
 pub struct XSaveAvx512Kmasks {
     pub k_regs: [u64; 8],
 }
 
 #[repr(C)]
-pub struct XSaveAvx512 {
+pub struct XSaveAvx512Zmm0_15h {
     pub zmm_h_regs: [[u8; 32]; 16],
 }
 
 #[repr(C)]
-pub struct XSaveAvx512Hi16 {
+pub struct XSaveAvx512Zmm15_31 {
     pub zmm_regs: [[u8; 64]; 16],
 }
 
@@ -110,20 +96,8 @@ impl XSaveSupports {
     }
 }
 
-impl XSaveStandardAvx {
-    fn avx_offset() -> usize {
-        static OFFSET: AtomicU32 = AtomicU32::new(0);
-        let mut offset = OFFSET.load(Ordering::Acquire);
-        if offset == 0 {
-            offset = arch::__cpuid_count(0x0d, 2).ebx;
-            OFFSET.store(offset, Ordering::Release);
-        }
-        offset as usize
-    }
-}
-
 #[derive(Clone, Copy)]
-struct XsaveAvxCpuid {
+pub struct XsaveAvxCpuid {
     pub offset: u32,
     pub size: u32,
 }

@@ -134,7 +134,7 @@ macro_rules! impl_with_resolved {
             #[inline(always)]
             fn call_with_resolved(&self, _src: Src) {
                 const {
-                    let mut slots = [false; 16];
+                    let mut slots = [false; 32];
                     let unique: [Option<usize>; _] = [$(<$t>::UNIQUE,)*];
                     let mut i = 0;
                     while i < unique.len() {
