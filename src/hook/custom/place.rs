@@ -137,13 +137,15 @@ macro_rules! impl_with_resolved {
                     let mut slots = [false; 32];
                     let unique: [Option<usize>; _] = [$(<$t>::UNIQUE,)*];
                     let mut i = 0;
+                    let mut has_dupes = false;
                     while i < unique.len() {
                         if let Some(unique) = unique[i] {
-                            assert!(!slots[unique], "duplicate register access");
+                            has_dupes |= slots[unique];
                             slots[unique] = true;
                         }
                         i += 1;
                     }
+                    assert!(!has_dupes, "duplicate register access");
                 }
                 $(let $arg = <$t>::resolve(&_src);)*
                 self($($arg,)*);
