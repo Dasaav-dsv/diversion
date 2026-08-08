@@ -98,7 +98,13 @@ where
 {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { self.0.as_mut() }
+        unsafe {
+            if const { size_of::<T>() == 4 } {
+                // Emulate clearing the upper 32 bits.
+                self.0.cast::<u32>().add(1).write(0);
+            }
+            self.0.as_mut()
+        }
     }
 }
 

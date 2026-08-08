@@ -1,6 +1,6 @@
 #![cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 #[cfg(target_arch = "x86")]
 use std::arch::x86 as arch;
@@ -11,8 +11,6 @@ pub const XSTATE_BV_X87: u64 = 0b00000001;
 pub const XSTATE_BV_SSE: u64 = 0b00000010;
 pub const XSTATE_BV_AVX: u64 = 0b00000100;
 pub const XSTATE_BV_AVX512: u64 = 0b11100000;
-
-pub(super) static XSAVE_AVX_SIZE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum XSaveSupports {
@@ -86,12 +84,10 @@ pub struct XSaveAvx512Zmm15_31 {
 }
 
 impl XSaveSupports {
-    #[target_feature(enable = "xsave")]
-    pub fn system() -> Self {
-        let xcr0 = unsafe { arch::_xgetbv(0) };
-        if xcr0 & XSTATE_BV_AVX512 != 0 {
+    pub fn from_xcr0(bv: u64) -> Self {
+        if bv & XSTATE_BV_AVX512 != 0 {
             Self::Avx512
-        } else if xcr0 & XSTATE_BV_AVX != 0 {
+        } else if bv & XSTATE_BV_AVX != 0 {
             Self::Avx
         } else {
             Self::Sse
@@ -106,7 +102,7 @@ pub struct XsaveAvxCpuid {
 }
 
 impl XsaveAvxCpuid {
-    fn get() -> Self {
+    pub fn get() -> Self {
         static EAX: AtomicU32 = AtomicU32::new(0);
         static EBX: AtomicU32 = AtomicU32::new(0);
 
@@ -117,7 +113,6 @@ impl XsaveAvxCpuid {
 
             EBX.store(cpuid.ebx, Ordering::Release);
             EAX.store(cpuid.eax, Ordering::Release);
-            XSAVE_AVX_SIZE.store((cpuid.ebx + cpuid.eax) as u64, Ordering::SeqCst);
 
             size = cpuid.eax;
         }

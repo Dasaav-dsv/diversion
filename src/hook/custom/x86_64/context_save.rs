@@ -1,12 +1,71 @@
-use std::{arch::naked_asm, sync::atomic::AtomicU64};
-
-use crate::hook::custom::xsave::{
-    XSAVE_AVX_SIZE, XSTATE_BV_AVX, XSTATE_BV_AVX512, XSTATE_BV_SSE, XSTATE_BV_X87, XSaveArea,
-    XSaveAvx, XSaveAvx512,
+use std::{
+    arch::{naked_asm, x86_64::_xgetbv},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
+use crate::hook::custom::{
+    x86_64::Legacy,
+    xsave::{
+        XSTATE_BV_AVX, XSTATE_BV_AVX512, XSTATE_BV_SSE, XSTATE_BV_X87, XSaveArea, XSaveAvx,
+        XSaveAvx512, XSaveSupports, XsaveAvxCpuid,
+    },
+};
+
+pub enum ContextSave {
+    Sse {
+        routine: *const (),
+    },
+    Avx {
+        routine: *const (),
+        avx_offset: usize,
+    },
+    Avx512 {
+        routine: *const (),
+        avx_offset: usize,
+        avx512_offset: usize,
+    },
+}
+
+static XSTATE_BV: AtomicU64 = AtomicU64::new(0);
+static XSAVE_AVX_SIZE: AtomicU64 = AtomicU64::new(0);
+
+impl ContextSave {
+    #[target_feature(enable = "xsave")]
+    pub fn select() -> Self {
+        let mut xcr0 = XSTATE_BV.load(Ordering::Acquire);
+        if xcr0 == 0 {
+            xcr0 = unsafe { _xgetbv(0) };
+            XSTATE_BV.store(xcr0, Ordering::Release);
+        }
+        match XSaveSupports::from_xcr0(xcr0) {
+            XSaveSupports::Sse => Self::Sse {
+                routine: xsave_sse as *const (),
+            },
+            XSaveSupports::Avx => match is_x86_feature_detected!("xsavec") {
+                false => {
+                    let cpuid = XsaveAvxCpuid::get();
+                    XSAVE_AVX_SIZE.store((cpuid.offset + cpuid.size) as u64, Ordering::SeqCst);
+                    Self::Avx {
+                        routine: xsave_avx as *const (),
+                        avx_offset: cpuid.offset as usize,
+                    }
+                }
+                true => Self::Avx {
+                    routine: xsavec_avx as *const (),
+                    avx_offset: size_of::<Legacy>(),
+                },
+            },
+            XSaveSupports::Avx512 => Self::Avx512 {
+                routine: xsavec_avx512 as *const (),
+                avx_offset: size_of::<Legacy>(),
+                avx512_offset: size_of::<Legacy>() + size_of::<XSaveAvx>(),
+            },
+        }
+    }
+}
+
 #[unsafe(naked)]
-pub unsafe extern "C" fn xsave_sse() {
+unsafe extern "C" fn xsave_sse() {
     naked_asm! {
         // save flags, rbp
         "pushfq",
@@ -15,7 +74,7 @@ pub unsafe extern "C" fn xsave_sse() {
 
         // the xsave area requires 64-byte alignment
         "and rsp,-64",
-        "sub rsp,{context_size}",
+        "sub rsp,{alloc_size}",
 
         // use rbx for indexing the stack, it's callee saved too
         "push rbx",
@@ -50,7 +109,8 @@ pub unsafe extern "C" fn xsave_sse() {
         "mov [rbx+0x60],r15",
 
         // xsave with flags
-        "mov eax,{xsave_flags}",
+        "mov eax,[rip+{xstate_bv}]",
+        "and eax,{xsave_flags}",
         "cdq",
         "xsave [rbx+0x68]",
 
@@ -75,7 +135,8 @@ pub unsafe extern "C" fn xsave_sse() {
         "mov r15,[rbx+0x60]",
 
         // xrstor with flags
-        "mov eax,{xsave_flags}",
+        "mov eax,[rip+{xstate_bv}]",
+        "and eax,{xsave_flags}",
         "cdq",
         "xrstor [rbx+0x68]",
 
@@ -91,13 +152,14 @@ pub unsafe extern "C" fn xsave_sse() {
         // restore rsp
         "pop rsp",
         "jmp [rip+0]",
-        context_size = const 0x60 + size_of::<XSaveArea>(),
+        alloc_size = const 0x60 + size_of::<XSaveArea>(),
         xsave_flags = const XSTATE_BV_X87 | XSTATE_BV_SSE,
+        xstate_bv = sym XSTATE_BV,
     }
 }
 
 #[unsafe(naked)]
-pub unsafe extern "C" fn xsave_avx() {
+unsafe extern "C" fn xsave_avx() {
     naked_asm! {
         // save flags, rbp
         "pushfq",
@@ -144,7 +206,8 @@ pub unsafe extern "C" fn xsave_avx() {
         "mov [rbx+0x60],r15",
 
         // xsave with flags
-        "mov eax,{xsave_flags}",
+        "mov eax,[rip+{xstate_bv}]",
+        "and eax,{xsave_flags}",
         "cdq",
         "xsave [rbx+0x68]",
 
@@ -169,7 +232,8 @@ pub unsafe extern "C" fn xsave_avx() {
         "mov r15,[rbx+0x60]",
 
         // xrstor with flags
-        "mov eax,{xsave_flags}",
+        "mov eax,[rip+{xstate_bv}]",
+        "and eax,{xsave_flags}",
         "cdq",
         "xrstor [rbx+0x68]",
 
@@ -187,11 +251,12 @@ pub unsafe extern "C" fn xsave_avx() {
         "jmp [rip+0]",
         xsave_avx_size = sym XSAVE_AVX_SIZE,
         xsave_flags = const XSTATE_BV_X87 | XSTATE_BV_SSE | XSTATE_BV_AVX,
+        xstate_bv = sym XSTATE_BV,
     }
 }
 
 #[unsafe(naked)]
-pub unsafe extern "C" fn xsavec_avx() {
+unsafe extern "C" fn xsavec_avx() {
     naked_asm! {
         // save flags, rbp
         "pushfq",
@@ -203,7 +268,7 @@ pub unsafe extern "C" fn xsavec_avx() {
 
         // size is determined dynamically via CPUID
         "sub rsp,0x60",
-        "sub rsp,{context_size}",
+        "sub rsp,{alloc_size}",
 
         // use rbx for indexing the stack, it's callee saved too
         "push rbx",
@@ -238,7 +303,8 @@ pub unsafe extern "C" fn xsavec_avx() {
         "mov [rbx+0x60],r15",
 
         // xsave with flags
-        "mov eax,{xsave_flags}",
+        "mov eax,[rip+{xstate_bv}]",
+        "and eax,{xsave_flags}",
         "cdq",
         "xsavec [rbx+0x68]",
 
@@ -263,7 +329,8 @@ pub unsafe extern "C" fn xsavec_avx() {
         "mov r15,[rbx+0x60]",
 
         // xrstor with flags
-        "mov eax,{xsave_flags}",
+        "mov eax,[rip+{xstate_bv}]",
+        "and eax,{xsave_flags}",
         "cdq",
         "xrstor [rbx+0x68]",
 
@@ -279,13 +346,14 @@ pub unsafe extern "C" fn xsavec_avx() {
         // restore rsp
         "pop rsp",
         "jmp [rip+0]",
-        context_size = const 0x60 + size_of::<XSaveArea>() + size_of::<XSaveAvx>(),
+        alloc_size = const 0x60 + size_of::<XSaveArea>() + size_of::<XSaveAvx>(),
         xsave_flags = const XSTATE_BV_X87 | XSTATE_BV_SSE | XSTATE_BV_AVX,
+        xstate_bv = sym XSTATE_BV,
     }
 }
 
 #[unsafe(naked)]
-pub unsafe extern "C" fn xsavec_avx512() {
+unsafe extern "C" fn xsavec_avx512() {
     naked_asm! {
         // save flags, rbp
         "pushfq",
@@ -297,7 +365,7 @@ pub unsafe extern "C" fn xsavec_avx512() {
 
         // size is determined dynamically via CPUID
         "sub rsp,0x60",
-        "sub rsp,{context_size}",
+        "sub rsp,{alloc_size}",
 
         // use rbx for indexing the stack, it's callee saved too
         "push rbx",
@@ -332,7 +400,8 @@ pub unsafe extern "C" fn xsavec_avx512() {
         "mov [rbx+0x60],r15",
 
         // xsave with flags
-        "mov eax,{xsave_flags}",
+        "mov eax,[rip+{xstate_bv}]",
+        "and eax,{xsave_flags}",
         "cdq",
         "xsavec [rbx+0x68]",
 
@@ -357,7 +426,8 @@ pub unsafe extern "C" fn xsavec_avx512() {
         "mov r15,[rbx+0x60]",
 
         // xrstor with flags
-        "mov eax,{xsave_flags}",
+        "mov eax,[rip+{xstate_bv}]",
+        "and eax,{xsave_flags}",
         "cdq",
         "xrstor [rbx+0x68]",
 
@@ -373,11 +443,12 @@ pub unsafe extern "C" fn xsavec_avx512() {
         // restore rsp
         "pop rsp",
         "jmp [rip+0]",
-        context_size = const {
+        alloc_size = const {
             0x60 + size_of::<XSaveArea>() + size_of::<XSaveAvx>() + size_of::<XSaveAvx512>()
         },
         xsave_flags = const {
             XSTATE_BV_X87 | XSTATE_BV_SSE | XSTATE_BV_AVX | XSTATE_BV_AVX512
         },
+        xstate_bv = sym XSTATE_BV,
     }
 }
