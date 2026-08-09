@@ -2,18 +2,14 @@
 
 use std::{
     debug_assert_matches,
-    mem::{self, MaybeUninit, offset_of},
-    ops::RangeBounds,
+    mem::{self, offset_of},
     ptr,
     range::RangeInclusive,
     sync::atomic::Ordering,
 };
 
 use closure_ffi::traits::FnPtr;
-use diversion_abi::{
-    context::process::{BoundedRangeAllocator, ProcessContext},
-    fn_ptr::AtomicErasedFnPtr,
-};
+use diversion_abi::{context::process::ProcessContext, fn_ptr::AtomicErasedFnPtr};
 
 use crate::{
     Result,
@@ -21,11 +17,9 @@ use crate::{
     installer::{
         Installer,
         arch::{
+            BoundedRangeAllocatorExt,
             atomic::U8SliceExt,
-            os::{
-                memory::{Protection, Region},
-                thread::IpReloc,
-            },
+            os::{memory::Protection, thread::IpReloc},
             x86_64::hook_site::HookSite,
         },
     },
@@ -347,40 +341,6 @@ impl ErasedInstaller {
                 thunk: self.thunk.downcast(),
             }
         }
-    }
-}
-
-trait BoundedRangeAllocatorExt {
-    fn os_alloc_near<T>(
-        &mut self,
-        ptr: *const (),
-        range: impl RangeBounds<isize> + Clone,
-    ) -> Result<Option<&'static mut MaybeUninit<T>>>;
-}
-
-impl BoundedRangeAllocatorExt for BoundedRangeAllocator {
-    fn os_alloc_near<T>(
-        &mut self,
-        ptr: *const (),
-        range: impl RangeBounds<isize> + Clone,
-    ) -> Result<Option<&'static mut MaybeUninit<T>>> {
-        let mut value = self.alloc_near(ptr, range.clone());
-
-        if value.is_none() {
-            let new = Region::alloc_near(ptr, range.clone(), size_of::<T>(), Protection::RWX)
-                .map_err(|err| E::Alloc {
-                    addr: ptr.addr(),
-                    err,
-                })?;
-
-            if let Some(new) = new {
-                let new = unsafe { &mut *(new.ptr as *mut [MaybeUninit<u8>]) };
-                self.adopt_range(new);
-                value = self.alloc_near(ptr, range.clone());
-            }
-        }
-
-        Ok(value)
     }
 }
 

@@ -1,16 +1,24 @@
 #![cfg(feature = "installer")]
 
+use std::{mem::MaybeUninit, ops::RangeBounds, ptr};
+
 use closure_ffi::traits::{FnMutThunk, FnOnceThunk, FnPtr, FnThunk};
+use diversion_abi::context::process::BoundedRangeAllocator;
 
 use crate::{
     Result,
+    error::Error,
     hook::{
         Handle, Static, Weak,
         leak::StaticHook,
         scoped::{Scope, scope_with_installer},
         temp::TemporaryHook,
     },
-    installer::{Installer, MakeInstaller, make::MakeHookInstaller},
+    installer::{
+        Installer, MakeInstaller,
+        arch::os::memory::{Protection, Region},
+        make::MakeHookInstaller,
+    },
 };
 
 mod atomic;
@@ -140,5 +148,46 @@ where
                 "this hook installer does not support {}", std::env::consts::ARCH
             ),
         }
+    }
+}
+
+pub(crate) trait BoundedRangeAllocatorExt {
+    #[allow(dead_code)]
+    fn os_alloc<T>(&mut self) -> Result<Option<&'static mut MaybeUninit<T>>>;
+
+    fn os_alloc_near<T>(
+        &mut self,
+        ptr: *const (),
+        range: impl RangeBounds<isize> + Clone,
+    ) -> Result<Option<&'static mut MaybeUninit<T>>>;
+}
+
+impl BoundedRangeAllocatorExt for BoundedRangeAllocator {
+    fn os_alloc<T>(&mut self) -> Result<Option<&'static mut MaybeUninit<T>>> {
+        self.os_alloc_near(ptr::without_provenance(0xdeadbeef), ..)
+    }
+
+    fn os_alloc_near<T>(
+        &mut self,
+        ptr: *const (),
+        range: impl RangeBounds<isize> + Clone,
+    ) -> Result<Option<&'static mut MaybeUninit<T>>> {
+        let mut value = self.alloc_near(ptr, range.clone());
+
+        if value.is_none() {
+            let new = Region::alloc_near(ptr, range.clone(), size_of::<T>(), Protection::RWX)
+                .map_err(|err| Error::Alloc {
+                    addr: ptr.addr(),
+                    err,
+                })?;
+
+            if let Some(new) = new {
+                let new = unsafe { &mut *(new.ptr as *mut [MaybeUninit<u8>]) };
+                self.adopt_range(new);
+                value = self.alloc_near(ptr, range.clone());
+            }
+        }
+
+        Ok(value)
     }
 }

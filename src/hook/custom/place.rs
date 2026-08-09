@@ -1,4 +1,9 @@
-use std::ptr::NonNull;
+use std::{
+    ptr::NonNull,
+    sync::atomic::{AtomicBool, Ordering},
+};
+
+use diversion_abi::sync::Mutex;
 
 pub trait Place<T> {
     unsafe fn read(&self) -> T;
@@ -14,8 +19,15 @@ pub trait ResolvePlace<Src> {
     fn resolve(src: &Src) -> Self;
 }
 
-pub trait WithResolved<Src, T> {
+pub trait WithResolved<Src, Args> {
     fn call_with_resolved(&self, src: Src);
+}
+
+pub struct FnMutWrapper<F>(Mutex<F>);
+
+pub struct FnOnceWrapper<F> {
+    inner: Mutex<Option<F>>,
+    flag: AtomicBool,
 }
 
 #[repr(transparent)]
@@ -23,6 +35,21 @@ pub struct Ref<T, const OFFSET: isize = 0>(*mut T);
 
 #[repr(transparent)]
 pub struct UnalignedRef<T, const OFFSET: isize = 0>(*mut T);
+
+impl<F> FnMutWrapper<F> {
+    pub(super) fn new(f: F) -> Self {
+        Self(Mutex::new(f))
+    }
+}
+
+impl<F> FnOnceWrapper<F> {
+    pub(super) fn new(f: F) -> Self {
+        Self {
+            inner: Mutex::new(Some(f)),
+            flag: AtomicBool::new(true),
+        }
+    }
+}
 
 impl<T> TrivialPlace for T where T: Place<Self> + Copy {}
 
@@ -131,7 +158,7 @@ macro_rules! impl_with_resolved {
             Fun: Fn($($t,)*),
             $($t: ResolvePlace<Src>,)*
         {
-            #[inline(always)]
+            #[inline]
             fn call_with_resolved(&self, _src: Src) {
                 const {
                     let mut slots = [false; 32];
@@ -149,6 +176,61 @@ macro_rules! impl_with_resolved {
                 }
                 $(let $arg = <$t>::resolve(&_src);)*
                 self($($arg,)*);
+            }
+        }
+        impl<Fun, Src, $($t,)*> WithResolved<Src, ($($t,)*)> for FnMutWrapper<Fun>
+        where
+            Fun: FnMut($($t,)*),
+            $($t: ResolvePlace<Src>,)*
+        {
+            #[inline]
+            fn call_with_resolved(&self, _src: Src) {
+                const {
+                    let mut slots = [false; 32];
+                    let unique: [Option<usize>; _] = [$(<$t>::UNIQUE,)*];
+                    let mut i = 0;
+                    let mut has_dupes = false;
+                    while i < unique.len() {
+                        if let Some(unique) = unique[i] {
+                            has_dupes |= slots[unique];
+                            slots[unique] = true;
+                        }
+                        i += 1;
+                    }
+                    assert!(!has_dupes, "duplicate register access");
+                }
+                $(let $arg = <$t>::resolve(&_src);)*
+                self.0.lock()($($arg,)*);
+            }
+        }
+        impl<Fun, Src, $($t,)*> WithResolved<Src, ($($t,)*)> for FnOnceWrapper<Fun>
+        where
+            Fun: FnOnce($($t,)*),
+            $($t: ResolvePlace<Src>,)*
+        {
+            #[inline]
+            fn call_with_resolved(&self, _src: Src) {
+                const {
+                    let mut slots = [false; 32];
+                    let unique: [Option<usize>; _] = [$(<$t>::UNIQUE,)*];
+                    let mut i = 0;
+                    let mut has_dupes = false;
+                    while i < unique.len() {
+                        if let Some(unique) = unique[i] {
+                            has_dupes |= slots[unique];
+                            slots[unique] = true;
+                        }
+                        i += 1;
+                    }
+                    assert!(!has_dupes, "duplicate register access");
+                }
+                $(let $arg = <$t>::resolve(&_src);)*
+                if self.flag.load(Ordering::Acquire)
+                    && let Some(f) = self.inner.lock().take()
+                {
+                    self.flag.store(false, Ordering::Release);
+                    f($($arg,)*);
+                }
             }
         }
     };

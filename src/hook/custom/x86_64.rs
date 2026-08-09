@@ -5,7 +5,7 @@ use crate::hook::custom::{
     xsave::{XSaveArea, XSaveAvx, XSaveAvx512},
 };
 
-mod context_save;
+pub(super) mod context_save;
 pub mod register;
 
 pub use register::defs::*;
