@@ -282,10 +282,15 @@ unsafe extern "C" fn xsave() {
 
         // xsave with flags
         "mov eax,[rip+{}]",
-        "cdq",
+        "xor edx,edx",
+
+        // xrstor wants the xsave header zeroed
+        "mov [rbx+0x270],rdx",
+        "mov [rbx+0x278],rdx",
+
         "call [rip+{}]",
 
-        // xrstor wants the reserved part of the xsave header zeroed
+        // xrstor wants the xsavec header zeroed (reserved fields)
         "xorps xmm0,xmm0",
         "movaps [rbx+0x280],xmm0",
         "movaps [rbx+0x290],xmm0",
