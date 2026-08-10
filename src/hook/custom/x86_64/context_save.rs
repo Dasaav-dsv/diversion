@@ -347,7 +347,7 @@ unsafe extern "C" fn xrstor() {
 
         // xrstor with flags
         "mov eax,[rip+{}]",
-        "cdq",
+        "xor edx,edx",
         "xrstor [rbx+0x70]",
 
         // restore flags

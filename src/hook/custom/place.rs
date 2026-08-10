@@ -161,18 +161,7 @@ macro_rules! impl_with_resolved {
             #[inline]
             fn call_with_resolved(&self, _src: Src) {
                 const {
-                    let mut slots = [false; 32];
-                    let unique: [Option<usize>; _] = [$(<$t>::UNIQUE,)*];
-                    let mut i = 0;
-                    let mut has_dupes = false;
-                    while i < unique.len() {
-                        if let Some(unique) = unique[i] {
-                            has_dupes |= slots[unique];
-                            slots[unique] = true;
-                        }
-                        i += 1;
-                    }
-                    assert!(!has_dupes, "duplicate register access");
+                    assert!(!has_dupes(&[$(<$t>::UNIQUE,)*]), "duplicate register access");
                 }
                 $(let $arg = <$t>::resolve(&_src);)*
                 self($($arg,)*);
@@ -186,18 +175,7 @@ macro_rules! impl_with_resolved {
             #[inline]
             fn call_with_resolved(&self, _src: Src) {
                 const {
-                    let mut slots = [false; 32];
-                    let unique: [Option<usize>; _] = [$(<$t>::UNIQUE,)*];
-                    let mut i = 0;
-                    let mut has_dupes = false;
-                    while i < unique.len() {
-                        if let Some(unique) = unique[i] {
-                            has_dupes |= slots[unique];
-                            slots[unique] = true;
-                        }
-                        i += 1;
-                    }
-                    assert!(!has_dupes, "duplicate register access");
+                    assert!(!has_dupes(&[$(<$t>::UNIQUE,)*]), "duplicate register access");
                 }
                 $(let $arg = <$t>::resolve(&_src);)*
                 self.0.lock()($($arg,)*);
@@ -211,22 +189,11 @@ macro_rules! impl_with_resolved {
             #[inline]
             fn call_with_resolved(&self, _src: Src) {
                 const {
-                    let mut slots = [false; 32];
-                    let unique: [Option<usize>; _] = [$(<$t>::UNIQUE,)*];
-                    let mut i = 0;
-                    let mut has_dupes = false;
-                    while i < unique.len() {
-                        if let Some(unique) = unique[i] {
-                            has_dupes |= slots[unique];
-                            slots[unique] = true;
-                        }
-                        i += 1;
-                    }
-                    assert!(!has_dupes, "duplicate register access");
+                    assert!(!has_dupes(&[$(<$t>::UNIQUE,)*]), "duplicate register access");
                 }
                 $(let $arg = <$t>::resolve(&_src);)*
                 if self.flag.load(Ordering::Acquire)
-                    && let Some(f) = self.inner.lock().take()
+                    && let Some(f) = { self.inner.lock().take() }
                 {
                     self.flag.store(false, Ordering::Release);
                     f($($arg,)*);
@@ -241,6 +208,20 @@ macro_rules! impl_with_resolved {
     () => {
         impl_with_resolved!(@impl );
     };
+}
+
+const fn has_dupes(unique: &[Option<usize>]) -> bool {
+    let mut slots = [false; 32];
+    let mut i = 0;
+    let mut has_dupes = false;
+    while i < unique.len() {
+        if let Some(unique) = unique[i] {
+            has_dupes |= slots[unique];
+            slots[unique] = true;
+        }
+        i += 1;
+    }
+    has_dupes
 }
 
 impl_with_resolved! {

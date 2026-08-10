@@ -76,7 +76,7 @@ where
                 let flag = AtomicBool::new(true);
                 thunk_factory::make_send_sync(move |args| {
                     if flag.load(Ordering::Acquire)
-                        && let Some(hook) = hook_fn.lock().take()
+                        && let Some(hook) = { hook_fn.lock().take() }
                     {
                         flag.store(false, Ordering::Release);
                         hook.call_once(args)

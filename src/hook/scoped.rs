@@ -272,7 +272,7 @@ where
     unsafe fn call<'a, 'b, 'c>(&self, args: T::Args<'a, 'b, 'c>) -> T::Ret<'a, 'b, 'c> {
         unsafe {
             if self.flag.load(Ordering::Acquire)
-                && let Some(hook) = self.hook.lock().take()
+                && let Some(hook) = { self.hook.lock().take() }
             {
                 self.flag.store(false, Ordering::Release);
                 (T::CC::default(), hook).call_once(args)
