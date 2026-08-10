@@ -112,23 +112,20 @@ where
     ONCE.call_once(|| {
         let xcr0 = unsafe { _xgetbv(0) };
 
+        let xsave_proc = if is_x86_feature_detected!("xsaveopt") {
+            xsaveopt_proc as *mut ()
+        } else {
+            xsave_proc as *mut ()
+        };
+
         let (size, flavor, bv, avx_offset, avx512_offset) = match XSaveSupports::from_xcr0(xcr0) {
-            XSaveSupports::Sse => (size_of::<XSaveArea>(), xsave_proc as *mut (), 0, 0, 0),
-            XSaveSupports::Avx => match is_x86_feature_detected!("xsavec") {
-                false => {
-                    let cpuid = XsaveAvxCpuid::get();
-                    let size = (cpuid.offset + cpuid.size) as usize;
-                    let offset = offset_of!(Legacy, xsave) + cpuid.offset as usize;
-                    (size, xsave_proc as *mut (), XSTATE_BV_AVX, offset, 0)
-                }
-                true => (
-                    size_of::<XSaveArea>() + size_of::<XSaveAvx>(),
-                    xsavec_proc as *mut (),
-                    XSTATE_BV_AVX,
-                    size_of::<Legacy>(),
-                    0,
-                ),
-            },
+            XSaveSupports::Sse => (size_of::<XSaveArea>(), xsave_proc, 0, 0, 0),
+            XSaveSupports::Avx => {
+                let cpuid = XsaveAvxCpuid::get();
+                let size = (cpuid.offset + cpuid.size) as usize;
+                let offset = offset_of!(Legacy, xsave) + cpuid.offset as usize;
+                (size, xsave_proc, XSTATE_BV_AVX, offset, 0)
+            }
             XSaveSupports::Avx512 => (
                 size_of::<XSaveArea>() + size_of::<XSaveAvx>() + size_of::<XSaveAvx512>(),
                 xsavec_proc as *mut (),
@@ -314,6 +311,14 @@ unsafe extern "C" fn xsave() {
 unsafe extern "C" fn xsave_proc() {
     naked_asm! {
         "xsave [rbx+0x70]",
+        "ret",
+    }
+}
+
+#[unsafe(naked)]
+unsafe extern "C" fn xsaveopt_proc() {
+    naked_asm! {
+        "xsaveopt [rbx+0x70]",
         "ret",
     }
 }
