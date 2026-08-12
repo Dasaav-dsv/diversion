@@ -141,17 +141,14 @@ where
                     // Don't hold the reader lock for long, just clone the inner `Arc`.
                     // It will stay alive for the rest of this scope, which means `original`
                     // also will.
-                    let first_hook = list.closures.read().first().cloned();
-
-                    // SAFETY: we know the concrete function type.
-                    let original = match &first_hook {
-                        Some(closure) => unsafe { T::from_ptr(closure.bare()) },
-                        None => original_ptr.load(Ordering::Acquire),
+                    let first = match list.closures.read().first() {
+                        Some(first) => first.clone(),
+                        None => unsafe {
+                            return original_ptr.load(Ordering::Acquire).call(args);
+                        },
                     };
 
-                    // SAFETY: function invariants upheld by caller; if `original` is a hook,
-                    // it can't be deallocated until `first_hook` is dropped.
-                    unsafe { original.call(args) }
+                    unsafe { T::from_ptr(first.bare()).call(args) }
                 }),
             )
             .leak();

@@ -14,6 +14,7 @@ struct Node<T> {
 }
 
 impl<T> LinkedSlab<T> {
+    #[inline]
     pub const fn new() -> Self {
         Self {
             inner: Slab::new(),
@@ -21,46 +22,56 @@ impl<T> LinkedSlab<T> {
         }
     }
 
+    #[inline]
     pub fn len(&self) -> usize {
         self.inner.len()
     }
 
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
 
+    #[inline]
     pub fn capacity(&self) -> usize {
         self.inner.capacity()
     }
 
+    #[inline]
     pub fn first(&self) -> Option<&T> {
         self.get(self.first)
     }
 
+    #[inline]
     pub fn first_mut(&mut self) -> Option<&mut T> {
         self.get_mut(self.first)
     }
 
+    #[inline]
     pub fn get(&self, key: usize) -> Option<&T> {
         let node = self.inner.get(key)?;
         Some(&node.item)
     }
 
+    #[inline]
     pub fn get_mut(&mut self, key: usize) -> Option<&mut T> {
         let node = self.inner.get_mut(key)?;
         Some(&mut node.item)
     }
 
+    #[inline]
     pub fn get_next(&self, key: usize) -> Option<&T> {
         let next = self.inner.get(key)?.next;
         self.get(next)
     }
 
+    #[inline]
     pub fn get_next_mut(&mut self, key: usize) -> Option<&mut T> {
         let next = self.inner.get(key)?.next;
         self.get_mut(next)
     }
 
+    #[inline]
     pub fn push_front(&mut self, item: T) -> usize {
         let old_first = self.first;
 
@@ -77,6 +88,7 @@ impl<T> LinkedSlab<T> {
         self.first
     }
 
+    #[inline]
     pub fn remove(&mut self, key: usize) -> Option<T> {
         let node = self.inner.try_remove(key)?;
 
@@ -95,6 +107,7 @@ impl<T> LinkedSlab<T> {
         Some(node.item)
     }
 
+    #[inline]
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         let mut next = self.first;
         iter::from_fn(move || {
@@ -106,6 +119,7 @@ impl<T> LinkedSlab<T> {
 }
 
 impl<T> Default for LinkedSlab<T> {
+    #[inline]
     fn default() -> Self {
         Self::new()
     }
