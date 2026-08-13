@@ -257,6 +257,9 @@ unsafe extern "C" fn xsave() {
         // save flags (again)
         "push [rbp+0x08]",
 
+        // xsave edx
+        "xor edx,edx",
+
         // real rsp (rbp + eflags + xsave ret addr + save_proc ret addr + red zone)
         "lea rax,[rbp+0xa0]",
         "mov [rbx+0x08],rax",
@@ -277,21 +280,20 @@ unsafe extern "C" fn xsave() {
         "mov [rbx+0x58],r14",
         "mov [rbx+0x60],r15",
 
-        // xsave with flags
+        // xsave eax
         "mov eax,[rip+{}]",
-        "xor edx,edx",
 
         // xrstor wants the xsave header zeroed
         "mov [rbx+0x270],rdx",
         "mov [rbx+0x278],rdx",
+        "mov [rbx+0x280],rdx",
+        "mov [rbx+0x288],rdx",
+        "mov [rbx+0x290],rdx",
+        "mov [rbx+0x298],rdx",
+        "mov [rbx+0x2a0],rdx",
+        "mov [rbx+0x2a8],rdx",
 
         "call [rip+{}]",
-
-        // xrstor wants the xsavec header zeroed (reserved fields)
-        "xorps xmm0,xmm0",
-        "movaps [rbx+0x280],xmm0",
-        "movaps [rbx+0x290],xmm0",
-        "movaps [rbx+0x2a0],xmm0",
 
         // params for ContextSave::call_proc
         "mov rdi,[rbp+0x18]",
@@ -334,6 +336,11 @@ unsafe extern "C" fn xsavec_proc() {
 #[unsafe(naked)]
 unsafe extern "C" fn xrstor() {
     naked_asm! {
+        // xrstor with flags
+        "mov eax,[rip+{}]",
+        "xor edx,edx",
+        "xrstor [rbx+0x70]",
+
         // real rbp
         "mov rax,[rbx+0x10]",
         "mov [rbp],rax",
@@ -349,11 +356,6 @@ unsafe extern "C" fn xrstor() {
         "mov r13,[rbx+0x50]",
         "mov r14,[rbx+0x58]",
         "mov r15,[rbx+0x60]",
-
-        // xrstor with flags
-        "mov eax,[rip+{}]",
-        "xor edx,edx",
-        "xrstor [rbx+0x70]",
 
         // restore flags
         "popfq",
