@@ -15,6 +15,10 @@ pub struct Gpr<T, const N: usize>(NonNull<T>);
 
 #[doc(hidden)]
 #[repr(transparent)]
+pub struct Flag<const N: usize>(NonNull<u32>);
+
+#[doc(hidden)]
+#[repr(transparent)]
 pub struct St<const N: usize>(NonNull<[u8; 10]>);
 
 #[doc(hidden)]
@@ -108,16 +112,44 @@ where
     }
 }
 
+impl<const N: usize> Place<bool> for Flag<N> {
+    #[inline]
+    unsafe fn read(&self) -> bool {
+        let eflags = unsafe { self.0.read() };
+        (eflags & Self::MASK) != 0
+    }
+
+    #[inline]
+    unsafe fn write(&mut self, value: bool) {
+        let eflags = unsafe { self.0.as_mut() };
+        *eflags = (*eflags & !Self::MASK) | (value as u32) << N;
+    }
+}
+
+impl<const N: usize> ResolvePlace<Context> for Flag<N> {
+    #[inline]
+    fn resolve(src: &Context) -> Self {
+        unsafe {
+            let eflags = &raw mut (*src.legacy).eflags;
+            Self(NonNull::new_unchecked(eflags))
+        }
+    }
+}
+
+impl<const N: usize> Flag<N> {
+    const MASK: u32 = 1 << N;
+}
+
 impl<const N: usize> Place<r80> for St<N> {
     #[inline]
     unsafe fn read(&self) -> r80 {
-        unsafe { self.0.as_ref().read() }
+        unsafe { self.0.read() }
     }
 
     #[inline]
     unsafe fn write(&mut self, value: r80) {
         unsafe {
-            self.0.as_mut().write(value);
+            *self.0.as_mut() = value;
         }
     }
 }
@@ -138,13 +170,13 @@ impl<const N: usize> ResolvePlace<Context> for St<N> {
 impl<const N: usize> Place<r128> for Xmm<N> {
     #[inline]
     unsafe fn read(&self) -> r128 {
-        unsafe { self.0.as_ref().read() }
+        unsafe { self.0.read() }
     }
 
     #[inline]
     unsafe fn write(&mut self, value: r128) {
         unsafe {
-            self.0.as_mut().write(value);
+            *self.0.as_mut() = value;
         }
     }
 }
@@ -297,13 +329,13 @@ impl<const N: usize> ResolvePlace<Context> for Zmm<N> {
 impl<const N: usize> Place<u64> for Kmask<N> {
     #[inline]
     unsafe fn read(&self) -> u64 {
-        unsafe { self.0.as_ref().read() }
+        unsafe { self.0.read() }
     }
 
     #[inline]
     unsafe fn write(&mut self, value: u64) {
         unsafe {
-            self.0.as_mut().write(value);
+            *self.0.as_mut() = value;
         }
     }
 }
@@ -466,6 +498,17 @@ pub(super) mod defs {
     pub type R14b = R14<u8>;
     /// Lowest 8-bits of [`R15`] (as a [`u8`] alias).
     pub type R15b = R15<u8>;
+
+    /// The carry flag (EFLAGS bit 0).
+    pub type CF = Flag<0>;
+    /// The parity flag (EFLAGS bit 2).
+    pub type PF = Flag<2>;
+    /// The zero flag (EFLAGS bit 6).
+    pub type ZF = Flag<6>;
+    /// The sign flag (EFLAGS bit 7).
+    pub type SF = Flag<7>;
+    /// The overflow flag (EFLAGS bit 11).
+    pub type OF = Flag<11>;
 
     /// 80-bit x87 floating point register ST0.
     pub type St0 = St<0>;
