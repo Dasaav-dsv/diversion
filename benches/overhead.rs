@@ -1,11 +1,8 @@
-use std::{arch::naked_asm, mem};
+use std::arch::naked_asm;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use diversion::{
-    hook::{
-        custom::{Code, CustomHook},
-        temp::TemporaryHook,
-    },
+    hook::{custom::install_custom, temp::TemporaryHook},
     install,
 };
 
@@ -33,11 +30,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("ret", |b| b.iter(|| unsafe { ret() }));
 
-    let _hook = unsafe {
-        install(mem::transmute::<*const (), Code>(ret as _))
-            .unwrap()
-            .custom_hook(|_| || ())
-    };
+    let _hook = unsafe { install_custom(ret as *const ()).unwrap().hook(|_| || ()) };
 
     c.bench_function("ret_hooked", |b| b.iter(|| unsafe { ret() }));
 }

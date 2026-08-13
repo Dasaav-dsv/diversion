@@ -9,11 +9,9 @@ use std::{
     },
 };
 
-use closure_ffi::traits::FnPtr;
 use diversion_abi::fn_ptr::AtomicErasedFnPtr;
 
 use crate::hook::custom::{
-    Code,
     place::WithResolved,
     x86_64::{Context, Legacy},
     xsave::{
@@ -98,9 +96,9 @@ impl ContextSave {
         }
     }
 
-    pub unsafe fn chain(&mut self, next: Code) -> Code {
-        self.next = AtomicErasedFnPtr::new(next.to_ptr());
-        unsafe { Code::from_ptr(&raw const *self as *const ()) }
+    pub unsafe fn chain(&mut self, next: *const ()) -> *const () {
+        self.next = AtomicErasedFnPtr::new(next);
+        &raw const *self as *const ()
     }
 }
 
