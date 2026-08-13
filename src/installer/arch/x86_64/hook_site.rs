@@ -1,4 +1,4 @@
-use std::{mem::MaybeUninit, ops::Bound, ptr};
+use std::{ops::Bound, ptr};
 
 use closure_ffi_iced_x86::{
     BlockEncoder, BlockEncoderOptions, Code, Decoder, DecoderOptions, FlowControl, Instruction,
@@ -26,6 +26,7 @@ pub struct HookSite<'a> {
     max_rel_addr: usize,
     target_addr: usize,
     trampoline_target_addr: usize,
+    will_branch: bool,
 }
 
 #[derive(Debug)]
@@ -53,11 +54,11 @@ impl<'a> HookSite<'a> {
 
             target_addr,
             trampoline_target_addr: target_addr,
+            will_branch: false,
         };
 
         let mut min_len = 0;
         let mut min_count = 0;
-        let mut will_branch = false;
 
         for insn in site.insns.iter().take_while(|insn| !insn.is_invalid()) {
             if min_len >= JmpRel::LEN {
@@ -68,7 +69,7 @@ impl<'a> HookSite<'a> {
             // Assume these instruction bytes are safe to overwrite.
             min_len += insn.len();
 
-            if will_branch {
+            if site.will_branch {
                 // Break if there is a non-padding byte after an assumed end of a function.
                 match insn.code() {
                     Code::Int1 | Code::Int3 | Code::Ud2 => continue,
@@ -80,7 +81,7 @@ impl<'a> HookSite<'a> {
             min_count += 1;
 
             // Assume padding bytes after unconditional control flow branches.
-            will_branch = insn.is_unconditional_branch();
+            site.will_branch = insn.is_unconditional_branch();
 
             // Record the lowest and highest relative address accesses if applicable.
             if insn.is_ip_rel_memory_operand() {
@@ -102,16 +103,18 @@ impl<'a> HookSite<'a> {
         site.insns.truncate(min_count);
         let last = site.insns.last().expect("has >= 1 instructions");
 
-        // Unconditionally append a jump back (even if control flow doesn't fall through).
-        let trampoline_target = last.next_ip();
-        site.trampoline_target_addr = trampoline_target as usize;
+        // Append a jump back if control flow falls through.
+        if !site.will_branch {
+            let trampoline_target = last.next_ip();
+            site.trampoline_target_addr = trampoline_target as usize;
 
-        // Inserting an IP-relative instruction.
-        site.min_rel_addr = site.min_rel_addr.min(site.trampoline_target_addr);
-        site.max_rel_addr = site.max_rel_addr.max(site.trampoline_target_addr);
+            // Inserting an IP-relative instruction.
+            site.min_rel_addr = site.min_rel_addr.min(site.trampoline_target_addr);
+            site.max_rel_addr = site.max_rel_addr.max(site.trampoline_target_addr);
 
-        let jmp_back = Instruction::with_branch(Code::Jmp_rel32_64, trampoline_target).unwrap();
-        site.insns.push(jmp_back);
+            let jmp_back = Instruction::with_branch(Code::Jmp_rel32_64, trampoline_target).unwrap();
+            site.insns.push(jmp_back);
+        }
 
         Ok(site)
     }
@@ -141,10 +144,9 @@ impl<'a> HookSite<'a> {
         // Over-allocate and reclaim unused bytes later.
         let reloc_buf = alloc
             .os_alloc_near::<[u8; RELOC_BUF_LEN]>(mid, range)?
-            .ok_or_else(|| E::oom(self.target_addr))?
-            .as_mut();
+            .ok_or_else(|| E::oom(self.target_addr))?;
 
-        let (bytes, relocs) = match self.encode_out(reloc_buf) {
+        let (bytes, relocs) = match self.encode_at(reloc_buf.as_ptr().addr()) {
             Ok(bytes_and_relocs) => bytes_and_relocs,
             Err(e) => {
                 alloc.reclaim(reloc_buf);
@@ -152,8 +154,16 @@ impl<'a> HookSite<'a> {
             }
         };
 
+        if bytes.len() > RELOC_BUF_LEN {
+            alloc.reclaim(reloc_buf);
+            return Err(E::EncodeSize {
+                addr: self.target_addr,
+                size: bytes.len(),
+            });
+        }
+
         // Take used bytes, reclaim the rest.
-        let (reloc_buf, rest) = reloc_buf.split_at_mut(bytes.len());
+        let (reloc_buf, rest) = <[_]>::split_at_mut(reloc_buf.as_mut(), bytes.len());
         alloc.reclaim(rest);
 
         let bytes = reloc_buf.write_copy_of_slice(&bytes);
@@ -166,12 +176,12 @@ impl<'a> HookSite<'a> {
         })
     }
 
-    fn encode_out(&self, buf: &mut [MaybeUninit<u8>]) -> Result<(Vec<u8>, Vec<IpReloc>)> {
+    fn encode_at(&self, ip: usize) -> Result<(Vec<u8>, Vec<IpReloc>)> {
         // We would like to know the addresses of all relocated instructions
         // to perform ip relocation as needed.
         let encoded = BlockEncoder::encode(
             64,
-            InstructionBlock::new(&self.insns, buf.as_ptr().addr() as u64),
+            InstructionBlock::new(&self.insns, ip as u64),
             BlockEncoderOptions::RETURN_NEW_INSTRUCTION_OFFSETS,
         )
         .map_err(|err| E::Encode {
@@ -179,26 +189,20 @@ impl<'a> HookSite<'a> {
             err,
         })?;
 
-        let bytes = encoded.code_buffer;
-
-        if bytes.len() > buf.len() {
-            return Err(E::EncodeSize {
-                addr: self.target_addr,
-                size: bytes.len(),
-            });
-        }
-
-        // Don't emit a reloc for the jump we appended.
-        let (_, insns) = self.insns.split_last().expect("has >= 1 instructions");
+        let mut insns = self.insns.as_slice();
+        if !self.will_branch {
+            // Don't emit a reloc for the jump we appended.
+            (_, insns) = insns.split_last().expect("has >= 1 instructions");
+        };
 
         // Due to an unfortunate design flaw in `BlockEncoder` used with
         // `RETURN_NEW_INSTRUCTION_OFFSETS` it's not possible to know
         // the relocated ip addresses for fixed up instructions.
         let mut relocs = Vec::with_capacity(insns.len());
-        let offsets = &encoded.new_instruction_offsets[1..insns.len()];
+        let offsets = &encoded.new_instruction_offsets[1..insns.len().max(1)];
 
         // We might need to do an extra decoder pass to determine some of the offsets.
-        let mut decoder = Decoder::new(64, &bytes, DecoderOptions::NO_INVALID_CHECK);
+        let mut decoder = Decoder::new(64, &encoded.code_buffer, DecoderOptions::NO_INVALID_CHECK);
         let mut instruction = Instruction::new();
         let mut last_ip = encoded.rip;
 
@@ -232,7 +236,7 @@ impl<'a> HookSite<'a> {
             });
         }
 
-        Ok((bytes, relocs))
+        Ok((encoded.code_buffer, relocs))
     }
 
     pub unsafe fn suspend_and_detour(
@@ -310,7 +314,6 @@ impl InstructionExt for Instruction {
 
 #[cfg(test)]
 mod tests {
-    use std::mem::MaybeUninit;
 
     use crate::installer::arch::x86_64::{
         DISASM_LEN,
@@ -351,12 +354,13 @@ mod tests {
 
     fn analyze_and_reencode(bytes: &[u8]) {
         let mut input = [0xcc; DISASM_LEN];
-        let mut output = [MaybeUninit::<u8>::uninit(); RELOC_BUF_LEN];
 
         let min = bytes.len().min(input.len());
         input[..min].copy_from_slice(&bytes[..min]);
 
         let site = HookSite::analyze(input.as_ptr().addr(), &input).unwrap();
-        site.encode_out(&mut output).unwrap();
+        let (bytes, _) = site.encode_at(input.as_ptr().addr() + 0x1000).unwrap();
+
+        assert!(bytes.len() <= RELOC_BUF_LEN);
     }
 }

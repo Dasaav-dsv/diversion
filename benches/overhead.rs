@@ -28,5 +28,5 @@ fn criterion_benchmark(c: &mut Criterion) {
 
 #[unsafe(naked)]
 unsafe extern "win64" fn add(a: i32, b: i32) -> i32 {
-    naked_asm!("lea eax,[rcx+rdx]", "nop", "nop", "nop", "nop", "ret")
+    naked_asm!("lea eax,[rcx+rdx]", "ret", "int3")
 }
