@@ -1,7 +1,13 @@
-use std::arch::naked_asm;
+use std::{arch::naked_asm, mem};
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use diversion::{hook::temp::TemporaryHook, install};
+use diversion::{
+    hook::{
+        custom::{Code, CustomHook},
+        temp::TemporaryHook,
+    },
+    install,
+};
 
 criterion_main!(benches);
 criterion_group!(benches, criterion_benchmark);
@@ -24,9 +30,24 @@ fn criterion_benchmark(c: &mut Criterion) {
             add(123, -123);
         })
     });
+
+    c.bench_function("ret", |b| b.iter(|| unsafe { ret() }));
+
+    let _hook = unsafe {
+        install(mem::transmute::<*const (), Code>(ret as _))
+            .unwrap()
+            .custom_hook(|_| || ())
+    };
+
+    c.bench_function("ret_hooked", |b| b.iter(|| unsafe { ret() }));
 }
 
 #[unsafe(naked)]
 unsafe extern "win64" fn add(a: i32, b: i32) -> i32 {
     naked_asm!("lea eax,[rcx+rdx]", "ret", "int3")
+}
+
+#[unsafe(naked)]
+unsafe extern "win64" fn ret() {
+    naked_asm!("ret 0", "int3", "int3")
 }
