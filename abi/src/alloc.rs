@@ -7,9 +7,9 @@ use crate::VERSION;
 pub mod vec;
 
 cfg_select! {
-    unix => {
-        mod unix;
-        use unix::*;
+    target_os = "linux" => {
+        mod linux;
+        use linux::*;
     }
     windows => {
         mod windows;

@@ -186,10 +186,10 @@ pub fn start_time() -> io::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use crate::alloc::unix;
+    use crate::alloc::linux;
 
     #[test]
     fn start_time() {
-        unix::start_time().unwrap();
+        linux::start_time().unwrap();
     }
 }
