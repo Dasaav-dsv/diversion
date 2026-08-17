@@ -1,8 +1,5 @@
 use std::mem;
 
-#[cfg(windows)]
-use diversion_abi::context::library::LibraryContext;
-
 #[cfg(target_os = "linux")]
 pub use crate::installer::arch::os::linux::{Thread, suspend_and_reloc_other_threads};
 #[cfg(windows)]
