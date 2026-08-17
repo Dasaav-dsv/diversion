@@ -3,27 +3,61 @@
 use std::{
     cmp::Reverse,
     ffi::{c_int, c_void},
-    fs, hint, io, iter, mem, ptr,
-    sync::atomic::{AtomicUsize, Ordering},
+    fs, hint, io, iter, mem,
+    process::abort,
+    ptr,
+    sync::{
+        Arc, Once, OnceLock, Weak,
+        atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering},
+    },
 };
 
-use diversion_abi::context::process::ProcessContext;
+use bump_into::BumpInto;
 use libc::{
     _SC_PAGESIZE, EEXIST, ENOMEM, MAP_ANONYMOUS, MAP_FAILED, MAP_FIXED_NOREPLACE, MAP_PRIVATE,
-    PROT_EXEC, PROT_READ, PROT_WRITE, RLIM_INFINITY, RLIMIT_AS, getrlimit, mmap, mprotect, munmap,
-    sysconf,
+    PROT_EXEC, PROT_READ, PROT_WRITE, RLIM_INFINITY, RLIMIT_AS, SA_RESTART, SA_SIGINFO, SIG_DFL,
+    SIG_IGN, SIGRTMAX, SIGRTMIN, getpid, getrlimit, gettid, greg_t, mmap, mprotect, munmap,
+    sigaction, sigemptyset, sysconf, ucontext_t,
 };
 
+#[cfg(target_arch = "x86")]
+use libc::REG_EIP as REG_IP;
+#[cfg(target_arch = "x86_64")]
+use libc::REG_RIP as REG_IP;
+
 use crate::installer::arch::os::{
+    linux::ffi::{rt_tgsigqueueinfo, sa_handler, sa_sigaction, siginfo_t},
     memory::{Protection, ProtectionGuard, Region, SysInfo},
-    thread::{IpReloc, ProcessContextExt, ThreadSuspendGuard},
+    thread::{IpReloc, ThreadSuspendGuard},
 };
+
+mod ffi;
+
+#[derive(Debug)]
+pub struct Thread {
+    pub id: c_int,
+    channel: Arc<Oneshot<AtomicUsize>>,
+    payload: Option<Box<Payload>>,
+}
 
 #[derive(Clone, Copy, Debug)]
 struct RegionInfo {
     start: usize,
     end: usize,
     prot: Protection,
+}
+
+#[derive(Debug)]
+struct Oneshot<T = ()> {
+    recv: Once,
+    send: Once,
+    value: T,
+}
+
+#[derive(Debug)]
+struct Payload {
+    suspend_count: Weak<AtomicUsize>,
+    channel: Weak<Oneshot<AtomicUsize>>,
 }
 
 impl SysInfo {
@@ -337,15 +371,249 @@ impl RegionInfo {
     }
 }
 
-impl ProcessContextExt for ProcessContext {
-    fn suspend_and_reloc_other_threads<'h, 'r>(
-        &'h mut self,
-        relocs: &'r [IpReloc],
-    ) -> io::Result<ThreadSuspendGuard<'h, 'r>> {
-        Err(io::Error::other("not implemented"))
+impl<T> Oneshot<T> {
+    fn new(value: T) -> Self {
+        Self {
+            recv: Once::new(),
+            send: Once::new(),
+            value,
+        }
+    }
+
+    fn wait_recv(&self) {
+        self.recv.wait_force();
+    }
+
+    fn wait_send(&self) {
+        self.send.wait_force();
+    }
+
+    fn notify_recv(&self) {
+        self.recv.call_once_force(|_| ());
+    }
+
+    fn notify_send(&self) {
+        self.send.call_once_force(|_| ());
     }
 }
 
-impl Drop for ThreadSuspendGuard<'_, '_> {
-    fn drop(&mut self) {}
+pub fn suspend_and_reloc_other_threads<'a, 'r>(
+    alloc: BumpInto<'a>,
+    relocs: &'r [IpReloc],
+) -> io::Result<ThreadSuspendGuard<'a, 'r>> {
+    // Precalculate the ip range any relocs would occur in.
+    let minmax_ip = relocs
+        .iter()
+        .map(|reloc| (reloc.from, reloc.from))
+        .reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)));
+
+    let Some((min_ip, max_ip)) = minmax_ip else {
+        // No ip relocations to be done.
+        return Ok(ThreadSuspendGuard {
+            threads: &mut [],
+            relocs,
+        });
+    };
+
+    let threads = unsafe { suspend_other_threads(alloc)? };
+
+    for thread in &*threads {
+        unsafe {
+            thread.set_ip_if(|ip| {
+                if ip >= min_ip && ip <= max_ip {
+                    // Map ip from `reloc.from` to `reloc.to`.
+                    Some(relocs.iter().find(|reloc| ip == reloc.from)?.to)
+                } else {
+                    None
+                }
+            });
+        }
+    }
+
+    Ok(ThreadSuspendGuard { threads, relocs })
+}
+
+unsafe fn suspend_other_threads<'a>(mut alloc: BumpInto<'a>) -> io::Result<&'a mut [Thread]> {
+    let threads_iter = Thread::others_iter()?;
+    let threads = alloc.alloc_down_with(threads_iter);
+
+    if !threads.is_empty() {
+        let sig = unsafe { my_sigaction()? };
+        let my_process = unsafe { getpid() };
+
+        IS_SUSPENDING.store(true, Ordering::Release);
+
+        let suspend_count = Arc::new(AtomicUsize::new(threads.len()));
+
+        for thread in &mut *threads {
+            let mut payload = thread.payload.take().unwrap();
+            payload.suspend_count = Arc::downgrade(&suspend_count);
+
+            let sival_ptr = Box::into_raw(payload) as *mut c_void;
+
+            if unsafe { rt_tgsigqueueinfo(my_process, thread.id, sig, sival_ptr) != 0 } {
+                suspend_count.fetch_sub(1, Ordering::Release);
+                thread.payload = unsafe { Some(Box::from_raw(sival_ptr as *mut Payload)) };
+                thread.id = -1;
+            }
+        }
+
+        while suspend_count.load(Ordering::Acquire) != 0 {
+            for thread in &mut *threads {
+                if thread.id >= 0
+                    && unsafe { rt_tgsigqueueinfo(my_process, thread.id, 0, ptr::null_mut()) != 0 }
+                {
+                    suspend_count.fetch_sub(1, Ordering::Release);
+                    thread.id = -1;
+                }
+            }
+            hint::spin_loop();
+        }
+
+        IS_SUSPENDING.store(false, Ordering::Release);
+    }
+
+    Ok(threads)
+}
+
+impl Thread {
+    fn new(id: c_int) -> Self {
+        let channel = Arc::new(Oneshot::new(AtomicUsize::new(1)));
+        Self {
+            id,
+            payload: Some(Box::new(Payload {
+                suspend_count: Weak::new(),
+                channel: Arc::downgrade(&channel),
+            })),
+            channel,
+        }
+    }
+
+    fn others_iter() -> io::Result<impl Iterator<Item = Self>> {
+        let my_id = unsafe { gettid() };
+
+        let mut threads = vec![];
+        let mut threads_dir = fs::read_dir("/proc/self/task")?;
+
+        while let Some(Ok(subdir)) = threads_dir.next() {
+            let thread_path = subdir.path();
+
+            let Ok(id) = thread_path
+                .file_name()
+                .unwrap_or_default()
+                .to_str()
+                .unwrap_or_default()
+                .parse::<i32>()
+            else {
+                continue;
+            };
+
+            if id < 0 || id == my_id {
+                continue;
+            }
+
+            threads.push(Self::new(id));
+        }
+
+        Ok(threads.into_iter())
+    }
+
+    pub unsafe fn set_ip_if(&self, f: impl FnOnce(usize) -> Option<usize>) -> Option<usize> {
+        self.channel.wait_send();
+        let mut ip = self.channel.value.load(Ordering::Relaxed);
+        if let Some(new_ip) = f(ip) {
+            ip = new_ip;
+            self.channel.value.store(new_ip, Ordering::Relaxed);
+        }
+        Some(ip)
+    }
+
+    pub unsafe fn resume(&self) {
+        if self.id >= 0 {
+            self.channel.wait_send();
+            self.channel.notify_recv();
+        }
+    }
+}
+
+static IS_SUSPENDING: AtomicBool = AtomicBool::new(false);
+
+unsafe fn my_sigaction() -> io::Result<c_int> {
+    #![allow(clippy::unnecessary_cast)]
+    static SIG: AtomicI32 = AtomicI32::new(-1);
+    let mut sig = SIG.load(Ordering::Acquire) as c_int;
+    if sig < 0 {
+        sig = SIGRTMIN();
+        let max = SIGRTMAX();
+        for _ in 0..3 {
+            sig = sig.midpoint(max);
+        }
+        SIG.store(sig as i32, Ordering::Release);
+    }
+
+    static OLD: OnceLock<sigaction> = OnceLock::new();
+    unsafe extern "C" fn sa_sigaction(sig: c_int, info: *mut siginfo_t, ucontext: *mut ucontext_t) {
+        if IS_SUSPENDING.load(Ordering::Acquire) {
+            unsafe {
+                suspend_sigaction(sig, info, ucontext);
+            }
+            return;
+        }
+
+        let old = OLD.wait();
+
+        let fn_ptr = match old.sa_sigaction {
+            SIG_DFL => abort(),
+            SIG_IGN => return,
+            fn_addr => ptr::with_exposed_provenance(fn_addr),
+        };
+
+        if old.sa_flags & SA_SIGINFO != 0 {
+            unsafe {
+                mem::transmute::<*const (), sa_sigaction>(fn_ptr)(sig, info, ucontext);
+            }
+        } else {
+            unsafe {
+                mem::transmute::<*const (), sa_handler>(fn_ptr)(sig);
+            }
+        }
+    }
+
+    static HANDLER_RES: OnceLock<c_int> = OnceLock::new();
+    let res = *HANDLER_RES.get_or_init(|| unsafe {
+        let mut new = mem::zeroed::<sigaction>();
+
+        new.sa_sigaction = sa_sigaction as *const () as usize;
+        new.sa_flags = SA_SIGINFO | SA_RESTART;
+        sigemptyset(&mut new.sa_mask);
+
+        let mut old = mem::zeroed::<sigaction>();
+
+        let res = sigaction(sig, &raw const new, &mut old);
+        OLD.get_or_init(|| old);
+
+        res
+    });
+
+    match res {
+        0 => Ok(sig),
+        _ => Err(io::Error::from_raw_os_error(res)),
+    }
+}
+
+unsafe fn suspend_sigaction(_sig: c_int, info: *mut siginfo_t, ucontext: *mut ucontext_t) {
+    let payload =
+        unsafe { Box::from_raw((*info)._sifields._rt.si_sigval.sival_ptr as *mut Payload) };
+
+    let suspend_count = payload.suspend_count.upgrade().unwrap();
+    suspend_count.fetch_sub(1, Ordering::Release);
+
+    let ip = unsafe { &mut (*ucontext).uc_mcontext.gregs[REG_IP as usize] };
+    let channel = payload.channel.upgrade().unwrap();
+
+    channel.value.store(*ip as usize, Ordering::Relaxed);
+    channel.notify_send();
+
+    channel.wait_recv();
+    *ip = channel.value.load(Ordering::Relaxed) as greg_t;
 }

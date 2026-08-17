@@ -4,14 +4,17 @@ mod ffi;
 
 use std::{io, iter, ptr, sync::LazyLock};
 
+use bump_into::BumpInto;
+use diversion_abi::context::library::LibraryContext;
+
 use crate::installer::arch::os::{
     memory::{Protection, ProtectionGuard, Region, SysInfo},
-    thread::Thread,
+    thread::{IpReloc, ThreadSuspendGuard},
     windows::ffi::{
-        CONTEXT, CONTEXT_CONTROL, CloseHandle, DWORD, ERROR_COMMITMENT_LIMIT,
+        CONTEXT, CONTEXT_CONTROL, CloseHandle, DWORD, DWORD64, ERROR_COMMITMENT_LIMIT,
         ERROR_INVALID_ADDRESS, ERROR_NOT_ENOUGH_MEMORY, GetCurrentProcess, GetCurrentThreadId,
-        GetSystemInfo, GetThreadContext, GetThreadId, GetThreadTimes, LPCVOID, LPVOID, MEM_COMMIT,
-        MEM_FREE, MEM_RELEASE, MEM_RESERVE, MEMORY_BASIC_INFORMATION, NtGetNextThread,
+        GetSystemInfo, GetThreadContext, GetThreadId, GetThreadTimes, HANDLE, LPCVOID, LPVOID,
+        MEM_COMMIT, MEM_FREE, MEM_RELEASE, MEM_RESERVE, MEMORY_BASIC_INFORMATION, NtGetNextThread,
         PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY,
         PAGE_GUARD, PAGE_NOCACHE, PAGE_READWRITE, PAGE_WRITECOMBINE, ResumeThread, STATUS_SUCCESS,
         SetThreadContext, SuspendThread, THREAD_GET_CONTEXT, THREAD_QUERY_INFORMATION,
@@ -19,6 +22,14 @@ use crate::installer::arch::os::{
         VirtualQuery,
     },
 };
+
+#[derive(Debug)]
+pub struct Thread {
+    id: DWORD,
+    handle: HANDLE,
+    pub start_time: u64,
+    pub run_time: u64,
+}
 
 impl SysInfo {
     pub fn get() -> Self {
@@ -181,14 +192,67 @@ impl From<MEMORY_BASIC_INFORMATION> for Region {
     }
 }
 
+pub fn suspend_and_reloc_other_threads<'a, 'r>(
+    mut alloc: BumpInto<'a>,
+    relocs: &'r [IpReloc],
+) -> io::Result<ThreadSuspendGuard<'a, 'r>> {
+    // Precalculate the ip range any relocs would occur in.
+    let minmax_ip = relocs
+        .iter()
+        .map(|reloc| (reloc.from, reloc.from))
+        .reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)));
+
+    let Some((min_ip, max_ip)) = minmax_ip else {
+        // No ip relocations to be done.
+        return Ok(ThreadSuspendGuard {
+            threads: &mut [],
+            relocs,
+        });
+    };
+
+    let thread_iter = unsafe { Thread::suspend_others_iter()? };
+    let threads = alloc.alloc_down_with(thread_iter);
+
+    let mut context = LibraryContext::acquire();
+
+    for thread in &*threads {
+        // If this thread's times are unchanged it's assumed to be on standby.
+        if context
+            .get_paused_thread_ip(thread.id, thread.start_time, thread.run_time)
+            .is_some_and(|ip| ip < min_ip || ip > max_ip)
+        {
+            // Skip this paused thread if its last known ip doesn't need a reloc.
+            continue;
+        }
+
+        let _new_ip = unsafe {
+            thread.set_ip_if(|ip| {
+                if ip >= min_ip && ip <= max_ip {
+                    // Map ip from `reloc.from` to `reloc.to`.
+                    Some(relocs.iter().find(|reloc| ip == reloc.from)?.to)
+                } else {
+                    None
+                }
+            })
+        };
+
+        // Update the observed ip of this thread to whatever the new value is.
+        if let Some(ip) = _new_ip {
+            context.set_thread_ip(thread.id, ip);
+        }
+    }
+
+    Ok(ThreadSuspendGuard { threads, relocs })
+}
+
 impl Thread {
-    pub unsafe fn suspend_others_iter() -> impl Iterator<Item = Thread> {
+    pub unsafe fn suspend_others_iter() -> io::Result<impl Iterator<Item = Self>> {
         let my_process = unsafe { GetCurrentProcess() };
         let my_id = unsafe { GetCurrentThreadId() };
 
         let mut handle = ptr::null_mut();
 
-        iter::from_fn(move || unsafe {
+        Ok(iter::from_fn(move || unsafe {
             let id = loop {
                 if NtGetNextThread(
                     my_process,
@@ -236,13 +300,15 @@ impl Thread {
                 return None;
             }
 
-            Some(Thread {
-                handle,
+            let run_time = u64::from(kernel_time).wrapping_add(user_time.into());
+
+            Some(Self {
                 id,
+                handle,
                 start_time: create_time.into(),
-                run_time: u64::from(kernel_time) + u64::from(user_time),
+                run_time,
             })
-        })
+        }))
     }
 
     pub unsafe fn set_ip_if(&self, f: impl FnOnce(usize) -> Option<usize>) -> Option<usize> {
@@ -255,16 +321,25 @@ impl Thread {
             return None;
         }
 
-        let ip = context.RIP as usize;
+        #[cfg(target_arch = "x86")]
+        let mut ip = context.Eip as usize;
+        #[cfg(target_arch = "x86_64")]
+        let mut ip = context.RIP as usize;
 
-        match f(ip) {
-            Some(new_ip) => unsafe {
-                context.RIP = new_ip as u64;
+        if let Some(new_ip) = f(ip) {
+            ip = new_ip;
+
+            #[cfg(target_arch = "x86")]
+            (context.Eip = new_ip as DWORD);
+            #[cfg(target_arch = "x86_64")]
+            (context.RIP = new_ip as DWORD64);
+
+            unsafe {
                 let _ = SetThreadContext(self.handle, &context);
-                Some(new_ip)
-            },
-            None => Some(ip),
+            }
         }
+
+        Some(ip)
     }
 
     pub unsafe fn resume(&self) {
