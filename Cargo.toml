@@ -17,6 +17,7 @@ version = "0.1.0"
 edition = "2024"
 authors.workspace = true
 license.workspace = true
+description = "Ergonomic function hooks for Windows and Linux"
 
 [dependencies]
 bump-into = { workspace = true, optional = true }

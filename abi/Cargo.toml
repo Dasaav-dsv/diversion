@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 authors.workspace = true
 license.workspace = true
+description = "In-process synchronization for the diversion crate"
 
 [dependencies]
 atomic-wait = { version = "1.1.0", optional = true }

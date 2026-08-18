@@ -1,6 +1,6 @@
 # Diversion ABI
 
-This crate is internal to `diversion` process synchronization. Do not depend on it directly.
+This crate is internal to `diversion` in-process synchronization. Do not depend on it directly.
 
 ## License
 Licensed under either of
