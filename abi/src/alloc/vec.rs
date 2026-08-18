@@ -60,14 +60,14 @@ impl<T> PodVec<T> {
     }
 
     pub fn as_ptr(&self) -> *const T {
-        match self.len {
+        match self.cap {
             0 => ptr::dangling(),
             _ => self.ptr,
         }
     }
 
     pub fn as_mut_ptr(&mut self) -> *mut T {
-        match self.len {
+        match self.cap {
             0 => ptr::dangling_mut(),
             _ => self.ptr.cast_mut(),
         }

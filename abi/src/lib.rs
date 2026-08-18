@@ -1,13 +1,10 @@
+#![doc = include_str!("../README.md")]
 #![cfg(feature = "__private_abi")]
-
 mod alloc;
 pub mod context;
 pub mod fn_ptr;
 pub mod linked_slab;
 pub mod sync;
-
-/// A memory address without provenance (`usize` alias).
-pub type Address = usize;
 
 pub const VERSION: u32 = {
     let version_str = env!("CARGO_PKG_VERSION_MAJOR").as_bytes();

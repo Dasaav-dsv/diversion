@@ -9,7 +9,6 @@ use closure_ffi::{UntypedBareFn, traits::FnPtr};
 use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 
 use crate::{
-    Address,
     fn_ptr::AtomicErasedFnPtr,
     linked_slab::LinkedSlab,
     sync::{Mutex, MutexGuard, RwLock},
@@ -36,7 +35,7 @@ pub struct ErasedClosureList {
     pub original_ptr: OnceLock<AtomicErasedFnPtr>,
 }
 
-type ClosureThunkId = (Address, TypeId);
+type ClosureThunkId = (usize, TypeId);
 
 type ClosureMap = HashMap<ClosureThunkId, &'static ErasedClosureList, Xxh3DefaultBuilder>;
 

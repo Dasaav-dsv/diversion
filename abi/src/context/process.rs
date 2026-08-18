@@ -13,7 +13,6 @@ use bump_into::BumpInto;
 use closure_ffi::traits::{Any, FnPtr};
 
 use crate::{
-    Address,
     alloc::{MmapBuilder, MmapRaw, vec::PodVec},
     fn_ptr::{AtomicErasedFnPtr, AtomicFnPtr},
     sync::pod::{MutexGuard, PodMutex, PodSpinMutex},
@@ -78,7 +77,7 @@ struct ProcessContextInner {
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 struct ThunkFn {
-    addr: Address,
+    addr: usize,
     thunk: &'static AtomicErasedFnPtr,
 }
 

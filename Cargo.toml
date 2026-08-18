@@ -1,18 +1,22 @@
-[package]
-name = "diversion"
-version = "0.1.0"
-edition = "2024"
-authors = ["Dasaav"]
-license = "MIT OR Apache-2.0"
-
 [workspace]
 members = ["abi"]
 resolver = "3"
+
+[workspace.package]
+authors = ["Dasaav"]
+license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 bump-into = "=0.8.3"
 closure-ffi = "5.1.2"
 libc = "0.2.189"
+
+[package]
+name = "diversion"
+version = "0.1.0"
+edition = "2024"
+authors.workspace = true
+license.workspace = true
 
 [dependencies]
 bump-into = { workspace = true, optional = true }
@@ -36,6 +40,10 @@ custom_cc = ["installer"]
 installer = ["diversion-abi/process_ctx", "dep:bump-into", "dep:libc"]
 parking_lot = ["diversion-abi/parking_lot"]
 bare_hrtb = ["closure-ffi/proc_macros"]
+
+[package.metadata.docs.rs]
+features = ["custom_cc"]
+targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
 
 [dev-dependencies]
 criterion = "0.8.2"
