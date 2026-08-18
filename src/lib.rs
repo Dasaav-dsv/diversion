@@ -5,8 +5,10 @@ pub mod error;
 pub mod hook;
 pub mod installer;
 
+pub use error::Error;
+
 /// The result type returned by functions in this crate.
-pub type Result<T> = std::result::Result<T, error::Error>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 #[cfg(feature = "installer")]
 pub use installer::arch::{

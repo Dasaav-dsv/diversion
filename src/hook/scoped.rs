@@ -92,6 +92,7 @@ where
         T: FnPtr + 'static,
         for<'a> (T::CC, &'a H): FnThunk<T>,
         H: Send + Sync + 'env,
+        Ctx<I, T>: Send + Sync + 'static,
     {
         unsafe { ScopedHook::hook(self, target, source) }
     }
@@ -120,7 +121,7 @@ where
     where
         T: FnPtr + 'static,
         (T::CC, H): FnOnceThunk<T>,
-        H: Send + 'scope,
+        H: Send + 'env,
         Ctx<I, T>: Send + Sync + 'static,
     {
         unsafe { ScopedHookOnce::hook(self, target, source) }
