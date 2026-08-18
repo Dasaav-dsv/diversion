@@ -1,4 +1,5 @@
 use std::{
+    ops::{Deref, DerefMut},
     ptr::NonNull,
     sync::atomic::{AtomicBool, Ordering},
 };
@@ -68,44 +69,19 @@ where
     }
 }
 
-impl<T, U, const OFFSET: isize> Place<T> for Ref<U, OFFSET>
-where
-    U: Place<T>,
-{
-    #[inline]
-    #[track_caller]
-    unsafe fn read(&self) -> T {
-        unsafe { (*self.0.byte_offset(OFFSET)).read() }
-    }
+impl<T, const OFFSET: isize> Deref for Ref<T, OFFSET> {
+    type Target = T;
 
     #[inline]
-    #[track_caller]
-    unsafe fn write(&mut self, value: T) {
-        unsafe {
-            (*self.0.byte_offset(OFFSET)).write(value);
-        }
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.as_ptr() }
     }
 }
 
-impl<T, U, const OFFSET: isize> Place<T> for UnalignedRef<U, OFFSET>
-where
-    U: Place<T>,
-{
+impl<T, const OFFSET: isize> DerefMut for Ref<T, OFFSET> {
     #[inline]
-    #[track_caller]
-    unsafe fn read(&self) -> T {
-        unsafe { self.0.byte_offset(OFFSET).read_unaligned().read() }
-    }
-
-    #[inline]
-    #[track_caller]
-    unsafe fn write(&mut self, value: T) {
-        unsafe {
-            let ptr = self.0.byte_offset(OFFSET);
-            let mut place = ptr.read_unaligned();
-            place.write(value);
-            ptr.write_unaligned(place);
-        }
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { &mut *self.as_mut_ptr() }
     }
 }
 
@@ -147,9 +123,47 @@ macro_rules! impl_generic_types {
     };
 }
 
+macro_rules! impl_ref_types {
+    ($t:ty,) => {
+        impl<T, const OFFSET: isize> $t {
+            #[inline]
+            pub fn as_ptr(&self) -> *const T {
+                unsafe { self.0.byte_offset(OFFSET) }
+            }
+            #[inline]
+            pub fn as_mut_ptr(&mut self) -> *mut T {
+                unsafe { self.0.byte_offset(OFFSET) }
+            }
+        }
+        impl<T, const OFFSET: isize> Place<Self> for $t {
+            #[inline]
+            unsafe fn read(&self) -> Self {
+                *self
+            }
+            #[inline]
+            unsafe fn write(&mut self, value: Self) {
+                *self = value;
+            }
+        }
+        impl<T, const OFFSET: isize> Clone for $t {
+            #[inline]
+            fn clone(&self) -> Self {
+                Self(self.0)
+            }
+        }
+        impl<T, const OFFSET: isize> Copy for $t {}
+    };
+    ($first:ty, $($rest:ty,)+) => {
+        impl_ref_types!($first,);
+        impl_ref_types!($($rest,)+);
+    };
+}
+
 impl_trivial_types! { i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, f32, f64, (), }
 
 impl_generic_types! { *const T, *mut T, Option<NonNull<T>>, }
+
+impl_ref_types! { Ref<T, OFFSET>, UnalignedRef<T, OFFSET>, }
 
 macro_rules! impl_with_resolved {
     (@impl $($arg:ident: $t:ident,)*) => {

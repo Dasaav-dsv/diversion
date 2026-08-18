@@ -120,11 +120,11 @@ mod tests {
         let stack = UnsafeCell::new([0xdeadbeef_u64; 8]);
         context.regs[4] = stack.get().expose_provenance() as u64;
 
-        with_resolved(&mut context, |mut stack: Stack<u64, 8>| unsafe {
-            stack.write(0xc0ffee);
+        with_resolved(&mut context, |stack: Stack<u64, 8>| unsafe {
+            *stack.read() = 0xc0ffee;
         });
         with_resolved(&mut context, |stack: Stack<[u64; 3]>| unsafe {
-            assert_eq!(stack.read(), [0xdeadbeef, 0xc0ffee, 0xdeadbeef]);
+            assert_eq!(*stack.read(), [0xdeadbeef, 0xc0ffee, 0xdeadbeef]);
         });
     }
 

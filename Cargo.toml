@@ -13,11 +13,12 @@ libc = "0.2.189"
 
 [package]
 name = "diversion"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
+repository = "https://github.com/Dasaav-dsv/diversion"
+description = "Ergonomic function hooks for Windows and Linux"
 authors.workspace = true
 license.workspace = true
-description = "Ergonomic function hooks for Windows and Linux"
 
 [dependencies]
 bump-into = { workspace = true, optional = true }
@@ -37,13 +38,13 @@ libc = { workspace = true, optional = true }
 
 [features]
 default = ["installer"]
-custom_cc = ["installer"]
+custom = ["installer"]
 installer = ["diversion-abi/process_ctx", "dep:bump-into", "dep:libc"]
 parking_lot = ["diversion-abi/parking_lot"]
 bare_hrtb = ["closure-ffi/proc_macros"]
 
 [package.metadata.docs.rs]
-features = ["custom_cc"]
+features = ["custom"]
 targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
 
 [dev-dependencies]
@@ -53,4 +54,4 @@ rayon = "1.12.0"
 [[bench]]
 name = "overhead"
 harness = false
-required-features = ["custom_cc"]
+required-features = ["custom"]

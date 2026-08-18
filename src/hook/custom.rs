@@ -1,4 +1,4 @@
-#![cfg(all(feature = "custom_cc", target_arch = "x86_64"))]
+#![cfg(all(feature = "custom", target_arch = "x86_64"))]
 
 use std::{fmt, mem::MaybeUninit, ops::Deref, sync::OnceLock};
 

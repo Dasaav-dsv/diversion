@@ -1,4 +1,6 @@
-# Diversion
+# diversion
+
+Ergonomic function hooks for Windows and Linux.
 
 ## License
 Licensed under either of
