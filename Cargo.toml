@@ -31,8 +31,7 @@ thiserror = "2.0.18"
 libc = { workspace = true, optional = true }
 
 [features]
-# TODO: remove custom_cc from default features
-default = ["installer", "custom_cc"]
+default = ["installer"]
 custom_cc = ["installer"]
 installer = ["diversion-abi/process_ctx", "dep:bump-into", "dep:libc"]
 parking_lot = ["diversion-abi/parking_lot"]
@@ -45,3 +44,4 @@ rayon = "1.12.0"
 [[bench]]
 name = "overhead"
 harness = false
+required-features = ["custom_cc"]
