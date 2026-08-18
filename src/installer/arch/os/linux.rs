@@ -14,10 +14,10 @@ use std::{
 
 use bump_into::BumpInto;
 use libc::{
-    _SC_PAGESIZE, EEXIST, ENOMEM, MAP_ANONYMOUS, MAP_FAILED, MAP_FIXED_NOREPLACE, MAP_PRIVATE,
-    PROT_EXEC, PROT_READ, PROT_WRITE, RLIM_INFINITY, RLIMIT_AS, SA_RESTART, SA_SIGINFO, SIG_DFL,
-    SIG_IGN, SIGRTMAX, SIGRTMIN, getpid, getrlimit, gettid, greg_t, mmap, mprotect, munmap,
-    sigaction, sigemptyset, sysconf, ucontext_t,
+    _SC_PAGESIZE, EEXIST, EINVAL, ENOMEM, MAP_ANONYMOUS, MAP_FAILED, MAP_FIXED_NOREPLACE,
+    MAP_PRIVATE, PROT_EXEC, PROT_READ, PROT_WRITE, RLIM_INFINITY, RLIMIT_AS, SA_RESTART,
+    SA_SIGINFO, SIG_DFL, SIG_IGN, SIGRTMAX, SIGRTMIN, getpid, getrlimit, gettid, greg_t, mmap,
+    mprotect, munmap, sigaction, sigemptyset, sysconf, ucontext_t,
 };
 
 #[cfg(target_arch = "x86")]
@@ -579,26 +579,28 @@ unsafe fn my_sigaction() -> io::Result<c_int> {
         }
     }
 
-    static HANDLER_RES: OnceLock<c_int> = OnceLock::new();
-    let res = *HANDLER_RES.get_or_init(|| unsafe {
-        let mut new = mem::zeroed::<sigaction>();
+    static HANDLER_RES: OnceLock<Result<(), c_int>> = OnceLock::new();
+    HANDLER_RES
+        .get_or_init(|| unsafe {
+            let mut old = mem::zeroed::<sigaction>();
+            let mut new = mem::zeroed::<sigaction>();
 
-        new.sa_sigaction = sa_sigaction as *const () as usize;
-        new.sa_flags = SA_SIGINFO | SA_RESTART;
-        sigemptyset(&mut new.sa_mask);
+            new.sa_sigaction = sa_sigaction as *const () as usize;
+            new.sa_flags = SA_SIGINFO | SA_RESTART;
+            sigemptyset(&mut new.sa_mask);
 
-        let mut old = mem::zeroed::<sigaction>();
+            if sigaction(sig, &raw const new, &mut old) != 0 {
+                let res = io::Error::last_os_error().raw_os_error().unwrap_or(EINVAL);
+                return Err(res);
+            }
 
-        let res = sigaction(sig, &raw const new, &mut old);
-        OLD.get_or_init(|| old);
+            OLD.get_or_init(|| old);
 
-        res
-    });
+            Ok(())
+        })
+        .map_err(io::Error::from_raw_os_error)?;
 
-    match res {
-        0 => Ok(sig),
-        _ => Err(io::Error::from_raw_os_error(res)),
-    }
+    Ok(sig)
 }
 
 unsafe fn suspend_sigaction(_sig: c_int, info: *mut siginfo_t, ucontext: *mut ucontext_t) {
