@@ -25,8 +25,8 @@ static XSTATE_BV: AtomicU64 = AtomicU64::new(0);
 static XSAVE_SIZE: AtomicUsize = AtomicUsize::new(0);
 static XSAVE_FLAVOR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 
-static XSAVE_AVX_OFFSET: AtomicUsize = AtomicUsize::new(0);
-static XSAVE_AVX512_OFFSET: AtomicUsize = AtomicUsize::new(0);
+static mut XSAVE_AVX_OFFSET: usize = 0;
+static mut XSAVE_AVX512_OFFSET: usize = 0;
 
 #[repr(C)]
 pub struct ContextSave {
@@ -139,8 +139,11 @@ where
         XSAVE_SIZE.store(size, Ordering::Release);
         XSAVE_FLAVOR.store(flavor, Ordering::Release);
 
-        XSAVE_AVX_OFFSET.store(avx_offset, Ordering::Release);
-        XSAVE_AVX512_OFFSET.store(avx512_offset, Ordering::Release);
+        // SAFETY: this is synchronized by the Once.
+        unsafe {
+            XSAVE_AVX_OFFSET = avx_offset;
+            XSAVE_AVX512_OFFSET = avx512_offset;
+        }
     });
 
     <F as ContextSaveProc<Args>>::save_proc as *const ()
@@ -192,14 +195,14 @@ impl JmpAbs {
 
 trait ContextSaveProc<Args>: WithResolved<Context, Args> + Sized {
     unsafe extern "sysv64" fn call_proc(&self, legacy: *mut Legacy) {
-        let avx_offset = XSAVE_AVX_OFFSET.load(Ordering::Acquire);
+        let avx_offset = unsafe { XSAVE_AVX_OFFSET };
         let avx = select_unpredictable(
             avx_offset != 0,
             legacy.wrapping_byte_add(avx_offset).cast::<XSaveAvx>(),
             ptr::null_mut(),
         );
 
-        let avx512_offset = XSAVE_AVX512_OFFSET.load(Ordering::Acquire);
+        let avx512_offset = unsafe { XSAVE_AVX512_OFFSET };
         let avx512 = select_unpredictable(
             avx512_offset != 0,
             legacy
