@@ -107,7 +107,7 @@ where
     F: WithResolved<Context, Args>,
 {
     static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
+    ONCE.call_once_force(|_| {
         let xcr0 = unsafe { _xgetbv(0) };
 
         let xsave_proc = if is_x86_feature_detected!("xsaveopt") {
