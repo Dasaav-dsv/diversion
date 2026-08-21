@@ -35,7 +35,7 @@ where
         (T::CC, H): FnThunk<T>,
         H: Send + Sync + 'static,
     {
-        unsafe { leak_hook(self, move |hook| (T::CC::default(), source(hook))) }
+        unsafe { self.static_hook_with_thunk(move |hook| (T::CC::default(), source(hook))) }
     }
 
     unsafe fn static_hook_mut<H>(self, source: impl FnOnce(Static<T, Ctx>) -> H) -> Static<T, Ctx>
@@ -44,7 +44,7 @@ where
         H: Send + 'static,
     {
         unsafe {
-            leak_hook(self, move |hook| {
+            self.static_hook_with_thunk(move |hook| {
                 let hook_fn = Mutex::new(source(hook));
                 thunk_factory::make_send_sync(move |args| {
                     (T::CC::default(), &mut *hook_fn.lock()).call_mut(args)
@@ -58,9 +58,8 @@ where
         (T::CC, H): FnOnceThunk<T>,
         H: Send + 'static,
     {
-        // SAFETY: `H` is already `'static`.
         unsafe {
-            leak_hook(self, move |hook| {
+            self.static_hook_with_thunk(move |hook| {
                 let hook_fn_once = (T::CC::default(), source(hook));
                 let hook_fn = Mutex::new(Some(hook_fn_once));
                 let flag = AtomicBool::new(true);
@@ -77,38 +76,36 @@ where
             })
         }
     }
-}
 
-unsafe fn leak_hook<T, Ctx, H>(
-    installer: impl HookInstaller<Target = T, Context = Ctx>,
-    source: impl FnOnce(Static<T, Ctx>) -> H,
-) -> Static<T, Ctx>
-where
-    T: FnPtr + 'static,
-    Ctx: Send + Sync + 'static,
-    H: FnThunk<T> + Send + Sync + 'static,
-{
-    // The `OnceLock` makes it possible to inject the hook context into `source` before
-    // the original function pointer is known.
-    let hook: &'static Hook<T, Ctx> = Box::leak(Box::new(Hook {
-        inner: OnceLock::new(),
-    }));
+    unsafe fn static_hook_with_thunk<H>(
+        self,
+        source: impl FnOnce(Static<T, Ctx>) -> H,
+    ) -> Static<T, Ctx>
+    where
+        H: FnThunk<T> + Send + Sync + 'static,
+    {
+        // The `OnceLock` makes it possible to inject the hook context into `source` before
+        // the original function pointer is known.
+        let hook: &'static Hook<T, Ctx> = Box::leak(Box::new(Hook {
+            inner: OnceLock::new(),
+        }));
 
-    // Trying to access this inside `source` will deadlock.
-    let hook_fn = source(hook);
+        // Trying to access this inside `source` will deadlock.
+        let hook_fn = source(hook);
 
-    // Leak and atomically insert the hook function.
-    // Turning it directly into a thunk will have the smallest possible overhead.
-    let thunk = BareFnAny::<T, dyn Send + Sync + 'static>::with_thunk(hook_fn).leak();
-    let original = installer.update_thunk(|_| thunk);
+        // Leak and atomically insert the hook function.
+        // Turning it directly into a thunk will have the smallest possible overhead.
+        let thunk = BareFnAny::<T, dyn Send + Sync + 'static>::with_thunk(hook_fn).leak();
+        let original = self.update_thunk(|_| thunk);
 
-    // Make `original` available and unblock hook context access.
-    hook.inner.get_or_init(move || RawHook {
-        context: installer.into_context(),
-        original,
-    });
+        // Make `original` available and unblock hook context access.
+        hook.inner.get_or_init(move || RawHook {
+            context: self.into_context(),
+            original,
+        });
 
-    hook
+        hook
+    }
 }
 
 impl<H, T, Ctx> StaticHook<T, Ctx> for H

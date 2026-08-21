@@ -6,19 +6,19 @@ resolver = "3"
 authors = ["Dasaav"]
 license = "MIT OR Apache-2.0"
 
-[workspace.dependencies]
-bump-into = "=0.8.3"
-closure-ffi = "5.1.2"
-libc = "0.2.189"
-
 [package]
 name = "diversion"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 repository = "https://github.com/Dasaav-dsv/diversion"
 description = "Ergonomic function hooks for Windows and Linux"
 authors.workspace = true
 license.workspace = true
+
+[workspace.dependencies]
+bump-into = "=0.8.3"
+closure-ffi = "5.1.2"
+libc = "0.2.189"
 
 [dependencies]
 bump-into = { workspace = true, optional = true }

@@ -87,6 +87,15 @@ where
             })
         }
     }
+
+    #[must_use = "the hook will be removed when the handle is dropped"]
+    unsafe fn hook_with_thunk<H>(self, source: impl FnOnce(Weak<T, Ctx>) -> H) -> Handle<T, Ctx>
+    where
+        H: FnThunk<T> + Send + Sync + 'static,
+    {
+        // SAFETY: `H` is already `'static`.
+        unsafe { self.hook_unchecked_lt(source) }
+    }
 }
 
 pub(super) trait TemporaryHookExt<T, Ctx>: HookInstaller<Target = T, Context = Ctx>
