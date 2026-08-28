@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 
 [package]
 name = "diversion"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 repository = "https://github.com/Dasaav-dsv/diversion"
 description = "Ergonomic function hooks for Windows and Linux"

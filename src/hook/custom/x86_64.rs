@@ -23,6 +23,7 @@ pub struct Legacy {
     pub eflags: u32,
     _reserved04: u32,
     pub regs: [u64; 16],
+    _reserved88: u64,
     pub xsave: XSaveArea,
 }
 
@@ -142,6 +143,7 @@ mod tests {
             eflags: 0,
             _reserved04: 0,
             regs: array::from_fn(|i| i as u64),
+            _reserved88: 0,
             xsave: unsafe { mem::zeroed() },
         }
     }

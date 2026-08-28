@@ -378,3 +378,5 @@ unsafe extern "C" fn xrstor() {
         sym XSTATE_BV,
     }
 }
+
+const _: () = assert!(offset_of!(Legacy, xsave) == 0x90);
