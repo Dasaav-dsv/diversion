@@ -32,7 +32,7 @@ impl U8SliceExt for [u8] {
         assert_eq!(self.len(), src.len(), "slice length mismatch");
 
         // SAFETY: upheld by caller.
-        let src = unsafe { slice::from_raw_parts(src as *const AtomicU8, self.len()) };
+        let src = unsafe { slice::from_raw_parts(src as *const AtomicU8, src.len()) };
         for (dst, src) in self.iter_mut().zip(src) {
             *dst = src.load(load_order);
         }

@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 #[cfg(feature = "bare_hrtb")]
 pub use closure_ffi::bare_hrtb;
 
@@ -9,6 +11,8 @@ pub use error::Error;
 
 /// The result type returned by functions in this crate.
 pub type Result<T> = std::result::Result<T, Error>;
+
+pub use installer::HookInstaller;
 
 #[cfg(feature = "installer")]
 pub use installer::arch::{

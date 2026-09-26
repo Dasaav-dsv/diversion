@@ -1,7 +1,7 @@
 use std::{fmt, sync::atomic::Ordering};
 
 use closure_ffi::traits::FnPtr;
-pub use diversion_abi::fn_ptr::AtomicFnPtr;
+pub(crate) use diversion_abi::fn_ptr::AtomicFnPtr;
 
 pub(crate) mod arch;
 pub mod make;
