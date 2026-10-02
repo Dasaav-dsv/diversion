@@ -49,6 +49,7 @@ targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
 
 [dev-dependencies]
 criterion = "0.8.2"
+pastey = "0.2.3"
 rayon = "1.12.0"
 
 [[bench]]
