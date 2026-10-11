@@ -15,7 +15,7 @@ macro_rules! tests_impl {
             }
 
             #[test]
-            fn [<static_hook_ $tys:lower $argn>]() {
+            fn [<temp_hook_ $tys:lower $argn>]() {
                 use diversion::hook::temp::TemporaryHook;
 
                 let f = std::hint::black_box(
@@ -30,7 +30,7 @@ macro_rules! tests_impl {
                     }
                 };
 
-                let mut hooks = vec![];
+                // let mut hooks = vec![];
                 let expected = std::sync::RwLock::new(call_f());
 
                 crate::common::hook_contended(call_f.clone(), &expected, || unsafe {
@@ -53,13 +53,14 @@ macro_rules! tests_impl {
                         *expected = expected.clone() + <$tys>::default();
                         assert_eq!(hooked, *expected, "at depth {i}");
 
-                        hooks.push(hook);
+                        std::mem::forget(hook);
+                        // hooks.push(hook);
                     }
                 });
             }
 
             #[test]
-            fn [<static_hook_mut_ $tys:lower $argn>]() {
+            fn [<temp_hook_mut_ $tys:lower $argn>]() {
                 use diversion::hook::temp::TemporaryHook;
 
                 let f = std::hint::black_box(
@@ -103,7 +104,7 @@ macro_rules! tests_impl {
             }
 
             #[test]
-            fn [<static_hook_once_ $tys:lower $argn>]() {
+            fn [<temp_hook_once_ $tys:lower $argn>]() {
                 let f = std::hint::black_box(
                     [<f_once_ $tys:lower $argn>] as unsafe extern $cc fn($($args: $tys,)*) -> $tys
                 );

@@ -210,10 +210,10 @@ pub fn suspend_and_reloc_other_threads<'a, 'r>(
         });
     };
 
+    let mut context = LibraryContext::acquire();
+
     let thread_iter = unsafe { Thread::suspend_others_iter()? };
     let threads = alloc.alloc_down_with(thread_iter);
-
-    let mut context = LibraryContext::acquire();
 
     for thread in &*threads {
         // If this thread's times are unchanged it's assumed to be on standby.
@@ -225,7 +225,7 @@ pub fn suspend_and_reloc_other_threads<'a, 'r>(
             continue;
         }
 
-        let _new_ip = unsafe {
+        let new_ip = unsafe {
             thread.set_ip_if(|ip| {
                 if ip >= min_ip && ip <= max_ip {
                     // Map ip from `reloc.from` to `reloc.to`.
@@ -237,7 +237,7 @@ pub fn suspend_and_reloc_other_threads<'a, 'r>(
         };
 
         // Update the observed ip of this thread to whatever the new value is.
-        if let Some(ip) = _new_ip {
+        if let Some(ip) = new_ip {
             context.set_thread_ip(thread.id, ip);
         }
     }

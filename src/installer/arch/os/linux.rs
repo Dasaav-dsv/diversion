@@ -198,8 +198,7 @@ impl Protection {
     }
 
     pub fn try_into_rwx_from_rx(self) -> Option<Self> {
-        const EXEC: u32 = PROT_EXEC as u32;
-        (self.0 & EXEC != 0).then(|| Self(self.0 | EXEC))
+        (self.0 & PROT_EXEC as u32 != 0).then(|| Self(self.0 | PROT_WRITE as u32))
     }
 
     fn from_str(s: &str) -> Self {

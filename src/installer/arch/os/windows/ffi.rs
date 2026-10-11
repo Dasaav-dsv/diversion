@@ -227,6 +227,7 @@ pub struct CONTEXT {
     pub Dr3: DWORD64,
     pub Dr6: DWORD64,
     pub Dr7: DWORD64,
+    pub Rax: DWORD64,
     pub Rcx: DWORD64,
     pub Rdx: DWORD64,
     pub Rbx: DWORD64,
