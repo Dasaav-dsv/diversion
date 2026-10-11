@@ -66,7 +66,7 @@ pub(crate) mod tests {
     use std::sync::atomic::Ordering;
 
     use closure_ffi::BareFnAny;
-    use diversion_abi::fn_ptr::AtomicFnPtr;
+    use diversion_abi::{alloc::jit::Alloc, fn_ptr::AtomicFnPtr};
 
     use crate::installer::{HookInstaller, Installer};
 
@@ -82,9 +82,10 @@ pub(crate) mod tests {
         let thunk: &'static AtomicFnPtr<ConcatStrFn> =
             Box::leak(Box::new(AtomicFnPtr::new(concat_str as ConcatStrFn)));
 
-        let target = BareFnAny::<ConcatStrFn, dyn Send + Sync + 'static>::new(|a, b| unsafe {
-            thunk.load(Ordering::Acquire)(a, b)
-        })
+        let target = BareFnAny::<ConcatStrFn, dyn Send + Sync + 'static, _>::new_in(
+            |a, b| unsafe { thunk.load(Ordering::Acquire)(a, b) },
+            Alloc,
+        )
         .leak();
 
         MockInstaller { target, thunk }

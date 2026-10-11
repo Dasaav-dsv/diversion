@@ -1,6 +1,6 @@
 #![doc = include_str!("../README.md")]
 #![cfg(feature = "__private_abi")]
-mod alloc;
+pub mod alloc;
 pub mod context;
 pub mod fn_ptr;
 pub mod linked_slab;

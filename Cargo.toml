@@ -17,7 +17,10 @@ license.workspace = true
 
 [workspace.dependencies]
 bump-into = "=0.8.3"
-closure-ffi = "5.1.2"
+closure-ffi = { version = "5.1.2", default-features = false, features = [
+    "std",
+    "safe_jit",
+] }
 libc = "0.2.189"
 
 [dependencies]
@@ -28,7 +31,7 @@ closure-ffi-iced-x86 = { version = "1.21.0-commit50066fb", default-features = fa
     "block_encoder",
     "exhaustive_enums",
 ] } # same as closure-ffi
-diversion-abi = { path = "abi", version = "0.1.0", features = [
+diversion-abi = { path = "abi", version = "0.2.0", features = [
     "__private_abi",
 ] }
 thiserror = "2.0.18"

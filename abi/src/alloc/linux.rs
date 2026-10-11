@@ -1,8 +1,13 @@
 use std::{
     ffi::{c_char, c_int},
-    fs, io, mem, ptr, thread,
+    fs, io, mem,
+    ptr::{self, NonNull},
+    sync::LazyLock,
+    thread,
     time::Duration,
 };
+
+use rlsf::FlexSource;
 
 use libc::{
     _SC_PAGESIZE, EEXIST, MAP_ANONYMOUS, MAP_FAILED, MAP_PRIVATE, MAP_SHARED, O_CREAT, O_EXCL,
@@ -10,7 +15,7 @@ use libc::{
     shm_unlink, stat, sysconf,
 };
 
-use crate::alloc::{MmapRaw, vec::PodVec};
+use crate::alloc::{MmapRaw, jit::Source, vec::PodVec};
 
 #[derive(Clone, Debug)]
 pub struct MmapName(String);
@@ -23,10 +28,7 @@ impl MmapName {
 
 impl<T> PodVec<T> {
     pub(super) fn reserve_one_realloc(&mut self) {
-        let page_size = unsafe { sysconf(_SC_PAGESIZE) as usize };
-        debug_assert!(page_size.is_power_of_two());
-
-        let raw_len = self.raw_len_for_grow(page_size);
+        let raw_len = self.raw_len_for_grow(*PAGE_SIZE);
         let raw_ptr = unsafe {
             mmap(
                 ptr::null_mut(),
@@ -178,11 +180,47 @@ unsafe fn open_with_flags(name: *const c_char, open_flags: c_int) -> io::Result<
     Ok(fd)
 }
 
+unsafe impl FlexSource for Source {
+    unsafe fn alloc(&mut self, min_size: usize) -> Option<ptr::NonNull<[u8]>> {
+        let size = min_size.next_multiple_of(*PAGE_SIZE);
+
+        let ptr = unsafe {
+            mmap(
+                ptr::null_mut(),
+                size,
+                PROT_READ | PROT_WRITE | PROT_EXEC,
+                MAP_PRIVATE | MAP_ANONYMOUS,
+                -1,
+                0,
+            )
+        };
+
+        if ptr == MAP_FAILED {
+            return None;
+        }
+
+        Some(NonNull::slice_from_raw_parts(
+            NonNull::new(ptr as *mut u8)?,
+            size,
+        ))
+    }
+
+    fn min_align(&self) -> usize {
+        *PAGE_SIZE
+    }
+}
+
 pub fn start_time() -> io::Result<String> {
     // starttime in proc_pid_stat(5)
     let stat = fs::read_to_string("/proc/self/stat")?;
     Ok(stat.split(' ').nth(21).unwrap_or("0").to_owned())
 }
+
+static PAGE_SIZE: LazyLock<usize> = LazyLock::new(|| unsafe {
+    let page_size = unsafe { sysconf(_SC_PAGESIZE) as usize };
+    debug_assert!(page_size.is_power_of_two());
+    page_size
+});
 
 #[cfg(test)]
 mod tests {

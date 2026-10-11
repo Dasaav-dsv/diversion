@@ -4,11 +4,13 @@ use std::{
     ffi::{OsStr, c_void},
     io, mem,
     os::windows::ffi::OsStrExt,
-    ptr,
+    ptr::{self, NonNull},
     sync::LazyLock,
 };
 
-use crate::alloc::{MmapRaw, vec::PodVec};
+use rlsf::FlexSource;
+
+use crate::alloc::{MmapRaw, jit::Source, vec::PodVec};
 
 #[derive(Clone, Debug)]
 pub struct MmapName(Vec<u16>);
@@ -125,7 +127,6 @@ unsafe extern "system" {
 impl<T> PodVec<T> {
     pub(super) fn reserve_one_realloc(&mut self) {
         let alloc_granularity = SYSTEM_INFO.dwAllocationGranularity as usize;
-        debug_assert!(alloc_granularity.is_power_of_two());
 
         let raw_len = self.raw_len_for_grow(alloc_granularity);
         let raw_ptr = unsafe {
@@ -242,6 +243,31 @@ impl Drop for MmapRaw {
     }
 }
 
+unsafe impl FlexSource for Source {
+    unsafe fn alloc(&mut self, min_size: usize) -> Option<ptr::NonNull<[u8]>> {
+        let alloc_granularity = SYSTEM_INFO.dwAllocationGranularity as usize;
+        let size = min_size.next_multiple_of(alloc_granularity);
+
+        let ptr = unsafe {
+            VirtualAlloc(
+                ptr::null_mut(),
+                size,
+                MEM_COMMIT | MEM_RESERVE,
+                PAGE_EXECUTE_READWRITE,
+            )
+        };
+
+        Some(NonNull::slice_from_raw_parts(
+            NonNull::new(ptr as *mut u8)?,
+            size,
+        ))
+    }
+
+    fn min_align(&self) -> usize {
+        SYSTEM_INFO.dwAllocationGranularity as usize
+    }
+}
+
 pub fn start_time() -> io::Result<String> {
     let mut time = Default::default();
 
@@ -265,6 +291,7 @@ pub fn start_time() -> io::Result<String> {
 static SYSTEM_INFO: LazyLock<SYSTEM_INFO> = LazyLock::new(|| unsafe {
     let mut info = mem::zeroed();
     GetSystemInfo(&mut info);
+    debug_assert!(info.dwAllocationGranularity.is_power_of_two());
     info
 });
 

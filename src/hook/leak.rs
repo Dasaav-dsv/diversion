@@ -11,7 +11,7 @@ use closure_ffi::{
     BareFnAny, thunk_factory,
     traits::{FnMutThunk, FnOnceThunk, FnPtr, FnThunk},
 };
-use diversion_abi::sync::Mutex;
+use diversion_abi::{alloc::jit::Alloc, sync::Mutex};
 
 use crate::{
     hook::{RawHook, Static},
@@ -95,7 +95,8 @@ where
 
         // Leak and atomically insert the hook function.
         // Turning it directly into a thunk will have the smallest possible overhead.
-        let thunk = BareFnAny::<T, dyn Send + Sync + 'static>::with_thunk(hook_fn).leak();
+        let thunk =
+            BareFnAny::<T, dyn Send + Sync + 'static, _>::with_thunk_in(hook_fn, Alloc).leak();
         let original = self.update_thunk(|_| thunk);
 
         // Make `original` available and unblock hook context access.

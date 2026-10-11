@@ -13,6 +13,7 @@ use closure_ffi::{
     traits::{FnMutThunk, FnOnceThunk, FnPtr, FnThunk},
 };
 use diversion_abi::{
+    alloc::jit::Alloc,
     context::library::{ErasedClosureList, LibraryContext},
     fn_ptr::AtomicFnPtr,
     sync::Mutex,
@@ -118,14 +119,14 @@ where
         let mut closures = hook.list.closures.write();
         let hook_fn = source(Arc::downgrade(&hook));
 
-        let untyped_with_lt = BareFnAny::with_thunk(hook_fn).into_untyped();
+        let untyped_with_lt = BareFnAny::with_thunk_in(hook_fn, Alloc).into_untyped();
 
         // SAFETY: iff the hook handle does not outlive `untyped_unchecked_lt`.
         // See `closure_ffi::UntypedBareFn::upcast` for other correctness notes.
         let untyped_unchecked_lt = unsafe {
             mem::transmute_copy::<
-                UntypedBareFn<dyn Send + Sync>,
-                UntypedBareFn<dyn Send + Sync + 'static>,
+                UntypedBareFn<dyn Send + Sync, Alloc>,
+                UntypedBareFn<dyn Send + Sync + 'static, Alloc>,
             >(&ManuallyDrop::new(untyped_with_lt))
         };
 
@@ -145,7 +146,7 @@ where
             let original_ptr: &'static AtomicFnPtr<T> =
                 unsafe { Box::leak(Box::new(AtomicFnPtr::new_uninit())) };
 
-            let thunk = BareFnAny::<T, dyn Send + Sync + 'static>::with_thunk(
+            let thunk = BareFnAny::<T, dyn Send + Sync + 'static, _>::with_thunk_in(
                 thunk_factory::make_send_sync(|args| {
                     // Don't hold the reader lock for long, just clone the inner `Arc`.
                     // It will stay alive for the rest of this scope, which means `original`
@@ -159,6 +160,7 @@ where
 
                     unsafe { T::from_ptr(first.bare()).call(args) }
                 }),
+                Alloc,
             )
             .leak();
 
