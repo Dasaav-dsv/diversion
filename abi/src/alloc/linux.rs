@@ -217,7 +217,7 @@ pub fn start_time() -> io::Result<String> {
 }
 
 static PAGE_SIZE: LazyLock<usize> = LazyLock::new(|| unsafe {
-    let page_size = unsafe { sysconf(_SC_PAGESIZE) as usize };
+    let page_size = sysconf(_SC_PAGESIZE) as usize;
     debug_assert!(page_size.is_power_of_two());
     page_size
 });

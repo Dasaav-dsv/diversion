@@ -36,6 +36,7 @@ mod ffi;
 #[derive(Debug)]
 pub struct Thread {
     pub id: c_int,
+    pub is_suspended: bool,
     channel: Arc<Oneshot<AtomicUsize>>,
     payload: Option<Box<Payload>>,
 }
@@ -480,6 +481,7 @@ impl Thread {
         let channel = Arc::new(Oneshot::new(AtomicUsize::new(1)));
         Self {
             id,
+            is_suspended: true,
             payload: Some(Box::new(Payload {
                 suspend_count: Weak::new(),
                 channel: Arc::downgrade(&channel),
