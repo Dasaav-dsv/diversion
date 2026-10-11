@@ -350,15 +350,6 @@ unsafe extern "system" {
     pub unsafe fn ResumeThread(hThread: HANDLE) -> DWORD;
 
     #[must_use]
-    pub unsafe fn GetThreadTimes(
-        hThread: HANDLE,
-        lpCreationTime: LPFILETIME,
-        lpExitTime: LPFILETIME,
-        lpKernelTime: LPFILETIME,
-        lpUserTime: LPFILETIME,
-    ) -> BOOL;
-
-    #[must_use]
     pub unsafe fn GetThreadContext(hThread: HANDLE, lpContext: LPCONTENT) -> BOOL;
 
     #[must_use]

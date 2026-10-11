@@ -5,7 +5,6 @@ mod ffi;
 use std::{io, iter, ptr, sync::LazyLock};
 
 use bump_into::BumpInto;
-use diversion_abi::context::library::LibraryContext;
 
 use crate::installer::arch::os::{
     memory::{Protection, ProtectionGuard, Region, SysInfo},
@@ -13,8 +12,8 @@ use crate::installer::arch::os::{
     windows::ffi::{
         CONTEXT, CONTEXT_CONTROL, CloseHandle, DWORD, DWORD64, ERROR_COMMITMENT_LIMIT,
         ERROR_INVALID_ADDRESS, ERROR_NOT_ENOUGH_MEMORY, GetCurrentProcess, GetCurrentThreadId,
-        GetSystemInfo, GetThreadContext, GetThreadId, GetThreadTimes, HANDLE, LPCVOID, LPVOID,
-        MEM_COMMIT, MEM_FREE, MEM_RELEASE, MEM_RESERVE, MEMORY_BASIC_INFORMATION, NtGetNextThread,
+        GetSystemInfo, GetThreadContext, GetThreadId, HANDLE, LPCVOID, LPVOID, MEM_COMMIT,
+        MEM_FREE, MEM_RELEASE, MEM_RESERVE, MEMORY_BASIC_INFORMATION, NtGetNextThread,
         PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY,
         PAGE_GUARD, PAGE_NOCACHE, PAGE_READWRITE, PAGE_WRITECOMBINE, ResumeThread, STATUS_SUCCESS,
         SetThreadContext, SuspendThread, THREAD_GET_CONTEXT, THREAD_QUERY_INFORMATION,
@@ -25,10 +24,8 @@ use crate::installer::arch::os::{
 
 #[derive(Debug)]
 pub struct Thread {
-    id: DWORD,
     handle: HANDLE,
-    pub start_time: u64,
-    pub run_time: u64,
+    pub is_suspended: bool,
 }
 
 impl SysInfo {
@@ -210,22 +207,15 @@ pub fn suspend_and_reloc_other_threads<'a, 'r>(
         });
     };
 
-    let mut context = LibraryContext::acquire();
-
     let thread_iter = unsafe { Thread::suspend_others_iter()? };
     let threads = alloc.alloc_down_with(thread_iter);
 
     for thread in &*threads {
-        // If this thread's times are unchanged it's assumed to be on standby.
-        if context
-            .get_paused_thread_ip(thread.id, thread.start_time, thread.run_time)
-            .is_some_and(|ip| ip < min_ip || ip > max_ip)
-        {
-            // Skip this paused thread if its last known ip doesn't need a reloc.
+        if !thread.is_suspended {
             continue;
         }
 
-        let new_ip = unsafe {
+        unsafe {
             thread.set_ip_if(|ip| {
                 if ip >= min_ip && ip <= max_ip {
                     // Map ip from `reloc.from` to `reloc.to`.
@@ -233,12 +223,7 @@ pub fn suspend_and_reloc_other_threads<'a, 'r>(
                 } else {
                     None
                 }
-            })
-        };
-
-        // Update the observed ip of this thread to whatever the new value is.
-        if let Some(ip) = new_ip {
-            context.set_thread_ip(thread.id, ip);
+            });
         }
     }
 
@@ -253,60 +238,27 @@ impl Thread {
         let mut handle = ptr::null_mut();
 
         Ok(iter::from_fn(move || unsafe {
-            let id = loop {
-                if NtGetNextThread(
-                    my_process,
-                    handle,
-                    THREAD_QUERY_INFORMATION
-                        | THREAD_SUSPEND_RESUME
-                        | THREAD_GET_CONTEXT
-                        | THREAD_SET_CONTEXT,
-                    0,
-                    0,
-                    &mut handle,
-                ) != STATUS_SUCCESS
-                {
-                    return None;
-                }
-
-                let id = GetThreadId(handle);
-
-                if id == 0 {
-                    return None;
-                }
-
-                if id != my_id {
-                    break id;
-                }
-            };
-
-            if SuspendThread(handle) == DWORD::MAX {
-                return None;
-            }
-
-            let mut create_time = Default::default();
-            let mut _exit_time = Default::default();
-            let mut kernel_time = Default::default();
-            let mut user_time = Default::default();
-
-            if GetThreadTimes(
+            if NtGetNextThread(
+                my_process,
                 handle,
-                &mut create_time,
-                &mut _exit_time,
-                &mut kernel_time,
-                &mut user_time,
-            ) == 0
+                THREAD_QUERY_INFORMATION
+                    | THREAD_SUSPEND_RESUME
+                    | THREAD_GET_CONTEXT
+                    | THREAD_SET_CONTEXT,
+                0,
+                0,
+                &mut handle,
+            ) != STATUS_SUCCESS
             {
                 return None;
             }
 
-            let run_time = u64::from(kernel_time).wrapping_add(user_time.into());
+            // We want to keep handles for all threads to close them later.
+            let is_suspended = GetThreadId(handle) != my_id && SuspendThread(handle) != DWORD::MAX;
 
             Some(Self {
-                id,
                 handle,
-                start_time: create_time.into(),
-                run_time,
+                is_suspended,
             })
         }))
     }
@@ -344,7 +296,9 @@ impl Thread {
 
     pub unsafe fn resume(&self) {
         unsafe {
-            let _ = ResumeThread(self.handle);
+            if self.is_suspended {
+                let _ = ResumeThread(self.handle);
+            }
             let _ = CloseHandle(self.handle);
         }
     }

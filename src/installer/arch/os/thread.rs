@@ -22,9 +22,11 @@ impl ThreadSuspendGuard<'_, '_> {
         // This function should be called very infrequently, so it's not optimized
         // for threads assumed to be paused.
         for thread in &*self.threads {
-            unsafe {
-                // Inverse of suspend_and_reloc_other_threads, map from `r.to` to `r.from`.
-                thread.set_ip_if(|ip| Some(self.relocs.iter().find(|r| ip == r.to)?.from));
+            if thread.is_suspended {
+                unsafe {
+                    // Inverse of suspend_and_reloc_other_threads, map from `r.to` to `r.from`.
+                    thread.set_ip_if(|ip| Some(self.relocs.iter().find(|r| ip == r.to)?.from));
+                }
             }
         }
     }
