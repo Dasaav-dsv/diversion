@@ -520,12 +520,18 @@ impl Thread {
     }
 
     pub unsafe fn set_ip_if(&self, f: impl FnOnce(usize) -> Option<usize>) -> Option<usize> {
+        if self.id < 0 {
+            return None;
+        }
+
         self.channel.wait_send();
+
         let mut ip = self.channel.value.load(Ordering::Relaxed);
         if let Some(new_ip) = f(ip) {
             ip = new_ip;
             self.channel.value.store(new_ip, Ordering::Relaxed);
         }
+
         Some(ip)
     }
 
