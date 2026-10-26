@@ -110,27 +110,35 @@ where
     ONCE.call_once_force(|_| {
         let xcr0 = unsafe { _xgetbv(0) };
 
-        let xsave_proc = if is_x86_feature_detected!("xsaveopt") {
-            xsaveopt_proc as *mut ()
-        } else {
-            xsave_proc as *mut ()
-        };
+        let (size, flavor, bv, avx_offset, avx512_offset) = match (
+            XSaveSupports::from_xcr0(xcr0),
+            is_x86_feature_detected!("xsavec"),
+        ) {
+            (XSaveSupports::Sse, _) => (size_of::<XSaveArea>(), xsave_proc as *mut (), 0, 0, 0),
 
-        let (size, flavor, bv, avx_offset, avx512_offset) = match XSaveSupports::from_xcr0(xcr0) {
-            XSaveSupports::Sse => (size_of::<XSaveArea>(), xsave_proc, 0, 0, 0),
-            XSaveSupports::Avx => {
+            (XSaveSupports::Avx, true) => (
+                size_of::<XSaveArea>() + size_of::<XSaveAvx>(),
+                xsavec_proc as *mut (),
+                XSTATE_BV_AVX,
+                size_of::<Legacy>(),
+                0,
+            ),
+            (XSaveSupports::Avx, false) => {
                 let cpuid = XsaveAvxCpuid::get();
                 let size = (cpuid.offset + cpuid.size) as usize;
                 let offset = offset_of!(Legacy, xsave) + cpuid.offset as usize;
-                (size, xsave_proc, XSTATE_BV_AVX, offset, 0)
+                (size, xsave_proc as *mut (), XSTATE_BV_AVX, offset, 0)
             }
-            XSaveSupports::Avx512 => (
+            (XSaveSupports::Avx512, true) => (
                 size_of::<XSaveArea>() + size_of::<XSaveAvx>() + size_of::<XSaveAvx512>(),
                 xsavec_proc as *mut (),
                 XSTATE_BV_AVX | XSTATE_BV_AVX512,
                 size_of::<Legacy>(),
                 size_of::<Legacy>() + size_of::<XSaveAvx>(),
             ),
+            (XSaveSupports::Avx512, false) => {
+                panic!("AVX-512 is not supported without XSAVEC");
+            }
         };
 
         let bv = bv | XSTATE_BV_X87 | XSTATE_BV_SSE;
@@ -314,14 +322,6 @@ unsafe extern "C" fn xsave() {
 unsafe extern "C" fn xsave_proc() {
     naked_asm! {
         "xsave [rbx+0x70]",
-        "ret",
-    }
-}
-
-#[unsafe(naked)]
-unsafe extern "C" fn xsaveopt_proc() {
-    naked_asm! {
-        "xsaveopt [rbx+0x70]",
         "ret",
     }
 }
