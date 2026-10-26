@@ -115,7 +115,6 @@ where
             is_x86_feature_detected!("xsavec"),
         ) {
             (XSaveSupports::Sse, _) => (size_of::<XSaveArea>(), xsave_proc as *mut (), 0, 0, 0),
-
             (XSaveSupports::Avx, true) => (
                 size_of::<XSaveArea>() + size_of::<XSaveAvx>(),
                 xsavec_proc as *mut (),
