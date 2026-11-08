@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 
 [package]
 name = "diversion"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2024"
 repository = "https://github.com/Dasaav-dsv/diversion"
 description = "Ergonomic function hooks for Windows and Linux"
@@ -17,7 +17,8 @@ license.workspace = true
 
 [workspace.dependencies]
 bump-into = "=0.8.3"
-closure-ffi = { version = "5.1.2", default-features = false, features = [
+closure-ffi = { git = "https://github.com/Dasaav-dsv/closure-ffi.git", branch = "refactor/jit-alloc", default-features = false, features = [
+    "default_jit_alloc",
     "std",
     "safe_jit",
 ] }
@@ -26,15 +27,16 @@ libc = "0.2.189"
 [dependencies]
 bump-into = { workspace = true, optional = true }
 closure-ffi.workspace = true
-closure-ffi-iced-x86 = { version = "1.21.0-commit50066fb", default-features = false, features = [
+iced-x86 = { version = "1.22.0", default-features = false, features = [
+    "std",
     "decoder",
     "block_encoder",
     "exhaustive_enums",
-] } # same as closure-ffi
+] }
 diversion-abi = { path = "abi", version = "0.2.0", features = [
     "__private_abi",
 ] }
-thiserror = "2.0.18"
+thiserror = "2.0.21"
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true, optional = true }

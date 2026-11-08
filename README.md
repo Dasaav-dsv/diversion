@@ -21,10 +21,6 @@ The separation of hook installation and hooking allows `diversion` users to prov
 
 Currently `diversion` supports all targets that [`closure-ffi`](https://crates.io/crates/closure-ffi) does. The `"installer"` and `"custom"` features are supported on x86_64 on Windows and Linux targets. x86 (32-bit) support is likely next.
 
-## Note about `iced-x86`
-
-This crate currently depends on [`closure-ffi-iced-x86`](https://crates.io/crates/closure-ffi-iced-x86) due to an [upstream dependency on it](https://github.com/icedland/iced/issues/762) to prevent duplicating the `iced-x86` dependency in its own dependency tree.
-
 ## License
 
 Licensed under either of

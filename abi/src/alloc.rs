@@ -4,7 +4,6 @@ use std::{ffi::c_void, io, process};
 
 use crate::VERSION;
 
-pub mod jit;
 pub mod vec;
 
 cfg_select! {

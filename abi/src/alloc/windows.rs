@@ -4,13 +4,11 @@ use std::{
     ffi::{OsStr, c_void},
     io, mem,
     os::windows::ffi::OsStrExt,
-    ptr::{self, NonNull},
+    ptr,
     sync::LazyLock,
 };
 
-use rlsf::FlexSource;
-
-use crate::alloc::{MmapRaw, jit::Source, vec::PodVec};
+use crate::alloc::{MmapRaw, vec::PodVec};
 
 #[derive(Clone, Debug)]
 pub struct MmapName(Vec<u16>);
@@ -27,9 +25,6 @@ type LPCVOID = *const c_void;
 type LPCWSTR = *const WCHAR;
 
 type HANDLE = *mut c_void;
-
-type LPFILETIME = *mut FILETIME;
-type LPSECURITY_ATTRIBUTES = *mut SECURITY_ATTRIBUTES;
 
 const INVALID_HANDLE_VALUE: HANDLE = -1isize as HANDLE;
 
@@ -71,12 +66,16 @@ struct SECURITY_ATTRIBUTES {
     bInheritHandle: BOOL,
 }
 
+type LPSECURITY_ATTRIBUTES = *mut SECURITY_ATTRIBUTES;
+
 #[derive(Clone, Copy, Default, Debug)]
 #[repr(C)]
 struct FILETIME {
     dwLowDateTime: DWORD,
     dwHighDateTime: DWORD,
 }
+
+type LPFILETIME = *mut FILETIME;
 
 unsafe extern "system" {
     unsafe fn GetLastError() -> DWORD;
@@ -240,31 +239,6 @@ impl Drop for MmapRaw {
         unsafe {
             let _ = UnmapViewOfFile(self.ptr);
         }
-    }
-}
-
-unsafe impl FlexSource for Source {
-    unsafe fn alloc(&mut self, min_size: usize) -> Option<ptr::NonNull<[u8]>> {
-        let alloc_granularity = SYSTEM_INFO.dwAllocationGranularity as usize;
-        let size = min_size.next_multiple_of(alloc_granularity);
-
-        let ptr = unsafe {
-            VirtualAlloc(
-                ptr::null_mut(),
-                size,
-                MEM_COMMIT | MEM_RESERVE,
-                PAGE_EXECUTE_READWRITE,
-            )
-        };
-
-        Some(NonNull::slice_from_raw_parts(
-            NonNull::new(ptr as *mut u8)?,
-            size,
-        ))
-    }
-
-    fn min_align(&self) -> usize {
-        SYSTEM_INFO.dwAllocationGranularity as usize
     }
 }
 

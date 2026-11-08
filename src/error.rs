@@ -1,6 +1,6 @@
 use std::io;
 
-use closure_ffi_iced_x86::IcedError;
+use iced_x86::IcedError;
 use thiserror::Error;
 
 /// The error type returned by functions in this crate.

@@ -8,7 +8,6 @@ use closure_ffi::{UntypedBareFn, traits::FnPtr};
 use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 
 use crate::{
-    alloc::jit::Alloc,
     fn_ptr::AtomicErasedFnPtr,
     linked_slab::LinkedSlab,
     sync::{Mutex, MutexGuard, RwLock},
@@ -25,7 +24,7 @@ pub struct LibraryContext {
 pub type LibraryContextGuard = MutexGuard<'static, LibraryContext>;
 
 /// A type erased closure associated with a single hook.
-pub type ErasedClosure = Arc<UntypedBareFn<dyn Send + Sync, Alloc>>;
+pub type ErasedClosure = Arc<UntypedBareFn<dyn Send + Sync>>;
 
 /// A list of type erased closures associated with a hook thunk.
 pub struct ErasedClosureList {

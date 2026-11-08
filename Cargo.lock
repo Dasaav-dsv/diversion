@@ -67,20 +67,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
-name = "capstone-git"
-version = "0.13.0-commit4ed86fb"
+name = "capstone"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e9dd4619ea21e336236594e90ecbf4e288acffb6d5f53914f697722b0156efa"
+checksum = "f442ae0f2f3f1b923334b4a5386c95c69c1cfa072bafa23d6fae6d9682eb1dd4"
 dependencies = [
- "capstone-sys-git",
+ "capstone-sys",
  "static_assertions",
 ]
 
 [[package]]
-name = "capstone-sys-git"
-version = "0.17.0-commit4ed86fb"
+name = "capstone-sys"
+version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72ca814cb91173fc5e93fd2943d64bd775b65fcd731ea8cbd5b210c1b78698d9"
+checksum = "a4e8087cab6731295f5a2a2bd82989ba4f41d3a428aab2e7c98d8f4db38aac05"
 dependencies = [
  "cc",
 ]
@@ -160,36 +160,39 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
-name = "closure-ffi"
-version = "5.1.2"
+name = "clear-cache"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1787d6fe2f18ae43036d072aec85ebc8f66c429a1e310061f73810bfdbbed721"
+checksum = "a2a99cd4270644c07e6102f3080aa70a0328c1a5703890f710536b302cdec524"
 dependencies = [
- "capstone-git",
- "closure-ffi-iced-x86",
- "closure-ffi-proc-macros",
  "libc",
- "rustflags",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
-name = "closure-ffi-iced-x86"
-version = "1.21.0-commit50066fb"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87f5da827759602d2f4c9225d519db7798eef3825973f7afb62739acac1df91d"
+name = "closure-ffi"
+version = "5.2.0"
+source = "git+https://github.com/Dasaav-dsv/closure-ffi.git?branch=refactor%2Fjit-alloc#dde4b20cf6eee707218f6c277644338e126c5ab0"
 dependencies = [
- "lazy_static",
+ "capstone",
+ "clear-cache",
+ "closure-ffi-proc-macros",
+ "iced-x86",
+ "libc",
+ "rlsf",
+ "rustflags",
+ "rustversion",
+ "spin 0.12.3",
 ]
 
 [[package]]
 name = "closure-ffi-proc-macros"
-version = "6.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6ca7ffa0482f5ff4253c443df858040ce67ee4a6bef01f021e6f1bf71d98731"
+version = "6.1.0"
+source = "git+https://github.com/Dasaav-dsv/closure-ffi.git?branch=refactor%2Fjit-alloc#dde4b20cf6eee707218f6c277644338e126c5ab0"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.118",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -266,13 +269,13 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 
 [[package]]
 name = "diversion"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "bump-into",
  "closure-ffi",
- "closure-ffi-iced-x86",
  "criterion",
  "diversion-abi",
+ "iced-x86",
  "libc",
  "pastey",
  "rayon",
@@ -281,14 +284,13 @@ dependencies = [
 
 [[package]]
 name = "diversion-abi"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "atomic-wait",
  "bump-into",
  "closure-ffi",
  "libc",
  "parking_lot",
- "rlsf",
  "slab",
  "xxhash-rust",
 ]
@@ -341,6 +343,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "iced-x86"
+version = "1.22.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c23ad4d19dca41180e835ef6fbd2c1ee655777eca086ad80dd517e0513322879"
+dependencies = [
+ "lazy_static",
+]
+
+[[package]]
 name = "itertools"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -372,7 +383,7 @@ version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 dependencies = [
- "spin",
+ "spin 0.9.9",
 ]
 
 [[package]]
@@ -492,18 +503,18 @@ dependencies = [
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.106"
+version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
+checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
 ]
 
 [[package]]
 name = "quote"
-version = "1.0.46"
+version = "1.0.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dfbc457d0c7a0759a614551b11a6409e5951f6c7537be1f1b7682b9ae9230368"
+checksum = "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
 dependencies = [
  "proc-macro2",
 ]
@@ -632,7 +643,7 @@ checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -673,6 +684,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
 
 [[package]]
+name = "spin"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0134f9043ed38b087ac4f7d4af44c79e2c9e5094421fe3164f435ce585953b10"
+
+[[package]]
 name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -691,9 +708,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "3.0.3"
+version = "3.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53e9bae58849f64dfa4f5d5ae372c8341f7305f82a3868709269343628b659a3"
+checksum = "d78c8dee4c7bf0e14673097256fed6142ce9d3b85a408189d07482442145823b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -702,22 +719,22 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.18"
+version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4288b5bcbc7920c07a1149a35cf9590a2aa808e0bc1eafaade0b80947865fbc4"
+checksum = "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e"
 dependencies = [
  "thiserror-impl",
 ]
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.18"
+version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ebc4ee7f67670e9b64d05fa4253e753e016c6c95ff35b89b7941d6b856dec1d5"
+checksum = "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.118",
+ "syn 3.0.9",
 ]
 
 [[package]]

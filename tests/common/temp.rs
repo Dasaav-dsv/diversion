@@ -30,7 +30,7 @@ macro_rules! tests_impl {
                     }
                 };
 
-                // let mut hooks = vec![];
+                let mut hooks = vec![];
                 let expected = std::sync::RwLock::new(call_f());
 
                 crate::common::hook_contended(call_f.clone(), &expected, || unsafe {
@@ -53,8 +53,7 @@ macro_rules! tests_impl {
                         *expected = expected.clone() + <$tys>::default();
                         assert_eq!(hooked, *expected, "at depth {i}");
 
-                        std::mem::forget(hook);
-                        // hooks.push(hook);
+                        hooks.push(hook);
                     }
                 });
             }

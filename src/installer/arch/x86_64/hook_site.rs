@@ -1,10 +1,10 @@
 use std::{ops::Bound, ptr};
 
-use closure_ffi_iced_x86::{
+use diversion_abi::context::process::BoundedRangeAllocator;
+use iced_x86::{
     BlockEncoder, BlockEncoderOptions, Code, Decoder, DecoderOptions, FlowControl, Instruction,
     InstructionBlock,
 };
-use diversion_abi::context::process::BoundedRangeAllocator;
 
 use crate::{
     Result,
